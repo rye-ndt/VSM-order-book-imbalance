@@ -7,7 +7,7 @@ import "context"
 type OHLCV struct {
 	Symbol      string
 	Market      string
-	TradingDate string  // DD/MM/YYYY
+	TradingDate string // DD/MM/YYYY
 	Open        float64
 	High        float64
 	Low         float64

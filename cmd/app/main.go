@@ -5,7 +5,11 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/example/order-book-imbalance/internal/config"
+	"github.com/example/order-book-imbalance/internal/job"
+	"github.com/example/order-book-imbalance/internal/modules"
 	"github.com/example/order-book-imbalance/internal/server"
 )
 
@@ -18,11 +22,31 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	srv := server.NewHTTPServer(cfg)
+	// -----------------------------------------------------------------------
+	// Dependency injection
+	//
+	// NewSSIStockClient returns input.StockDataClient (the port interface).
+	// To swap the data source, replace this line with any other constructor
+	// that satisfies the same interface — nothing else in the app changes.
+	// -----------------------------------------------------------------------
+	stockClient := modules.NewSSIStockClient(cfg.SSI)
 
-	log.Printf("starting HTTP server on %s\n", cfg.HTTPListenAddr)
+	// -----------------------------------------------------------------------
+	// Cron scheduler – runs market data fetch every day at 03:30
+	// -----------------------------------------------------------------------
+	c := cron.New()
+	if _, err := c.AddJob("30 3 * * *", job.NewMarketDataJob(stockClient)); err != nil {
+		log.Fatalf("failed to register market data cron job: %v", err)
+	}
+	c.Start()
+	defer c.Stop()
+
+	// -----------------------------------------------------------------------
+	// HTTP server
+	// -----------------------------------------------------------------------
+	srv := server.NewHTTPServer(cfg)
+	log.Printf("starting HTTP server on %s", cfg.HTTPListenAddr)
 	if err := http.ListenAndServe(cfg.HTTPListenAddr, srv.Router()); err != nil {
-		log.Fatalf("server exited with error: %v", err)
+		log.Fatalf("server exited: %v", err)
 	}
 }
-

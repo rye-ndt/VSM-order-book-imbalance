@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	pathAccessToken    = "/api/v2/Market/AccessToken"
-	pathDailyOHLC      = "/api/v2/Market/DailyOhlc"
+	pathAccessToken     = "/api/v2/Market/AccessToken"
+	pathDailyOHLC       = "/api/v2/Market/DailyOhlc"
 	pathDailyStockPrice = "/api/v2/Market/DailyStockPrice"
 
 	// ssiDateFormat matches the DD/MM/YYYY format used by all SSI endpoints.
@@ -32,9 +32,6 @@ const (
 	tokenTTL = 23 * time.Hour
 )
 
-// Compile-time assertion that SSIStockClient satisfies the port.
-var _ input.StockDataClient = (*SSIStockClient)(nil)
-
 // SSIStockClient implements input.StockDataClient using the SSI
 // FastConnectData REST API v2.  Credentials are read from config.SSIConfig.
 type SSIStockClient struct {
@@ -46,7 +43,7 @@ type SSIStockClient struct {
 }
 
 // NewSSIStockClient constructs a ready-to-use SSIStockClient.
-func NewSSIStockClient(cfg config.SSIConfig) *SSIStockClient {
+func NewSSIStockClient(cfg config.SSIConfig) input.StockDataClient {
 	return &SSIStockClient{
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
