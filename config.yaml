@@ -1,0 +1,15 @@
+http_listen_addr: ":8080"
+
+db:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  name: "orderbook"
+  sslmode: "disable"
+
+ssi:
+  consumer_id: ""      # SSI FastConnectData consumerID
+  consumer_secret: ""  # SSI FastConnectData consumerSecret
+  base_url: "https://fc-data.ssi.com.vn"
+
