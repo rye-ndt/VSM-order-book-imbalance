@@ -1,0 +1,105 @@
+package output
+
+import (
+	"context"
+	"time"
+
+	"github.com/example/order-book-imbalance/internal/interface/input"
+)
+
+type VolumeTrend string
+
+const (
+	VolumeTrendRising  VolumeTrend = "rising"
+	VolumeTrendFalling VolumeTrend = "falling"
+	VolumeTrendFlat    VolumeTrend = "flat"
+)
+
+type VPRLabel string
+
+const (
+	VPRInstitutional VPRLabel = "Institutional"
+	VPRWeak          VPRLabel = "Weak"
+	VPRDistribution  VPRLabel = "Distribution"
+	VPRCapitulation  VPRLabel = "Capitulation"
+	VPRNeutral       VPRLabel = "Neutral"
+)
+
+type CandlePattern string
+
+const (
+	PatternThreeSoldiers       CandlePattern = "Three_Soldiers"
+	PatternDipRecover          CandlePattern = "Dip_Recover"
+	PatternCompressionBreakout CandlePattern = "Compression_Breakout"
+	PatternThreeCrows          CandlePattern = "Three_Crows"
+	PatternShootingStar        CandlePattern = "Shooting_Star"
+	PatternHammer              CandlePattern = "Hammer"
+	PatternDoji                CandlePattern = "Doji"
+	PatternNeutral             CandlePattern = "Neutral"
+)
+
+type RegimeLabel string
+
+const (
+	RegimeBull   RegimeLabel = "Bull"
+	RegimeBear   RegimeLabel = "Bear"
+	RegimeChoppy RegimeLabel = "Choppy"
+)
+
+type StockMetrics struct {
+	Symbol             string
+	TradingDate        string // DD/MM/YYYY
+	CPR                float64
+	UpperWickRatio     float64
+	MA20Volume         float64
+	VolumeRatio1D      float64
+	VolumeTrend3D      VolumeTrend
+	VPR                VPRLabel
+	MomentumScore      int
+	CandlePattern      CandlePattern
+	ResistanceDistance float64
+	Above20MA          bool
+	ShouldMonitorToday bool
+	// Scoring inputs — populated in the pipeline before ComputeFinalScore.
+	// ForeignNetBuy and Regime are not stored in stock_metrics; they are
+	// loaded from their own tables and embedded here for self-contained scoring.
+	ForeignNetBuy bool
+	Regime        RegimeLabel
+	// Scoring outputs — stored in stock_metrics.
+	FinalScore       int
+	PositionSizeFlag string
+}
+
+type MarketRegime struct {
+	TradingDate string // DD/MM/YYYY
+	Regime      RegimeLabel
+}
+
+type MarketStore interface {
+	Migrate(ctx context.Context) error
+
+	UpsertStockOHLCV(ctx context.Context, records []input.OHLCV) error
+	UpsertForeignFlow(ctx context.Context, records []input.ForeignFlow) error
+	UpsertIndexOHLCV(ctx context.Context, records []input.OHLCV) error
+	UpsertStockMetrics(ctx context.Context, records []StockMetrics) error
+	UpsertMarketRegime(ctx context.Context, regime MarketRegime) error
+
+	LatestStockOHLCVDate(ctx context.Context) (time.Time, bool, error)
+	LatestForeignFlowDate(ctx context.Context) (time.Time, bool, error)
+	LatestIndexOHLCVDate(ctx context.Context, symbol string) (time.Time, bool, error)
+
+	// LoadRecentStockOHLCV returns the last N calendar days of equity OHLCV
+	// grouped by symbol, sorted newest-first per symbol.
+	LoadRecentStockOHLCV(ctx context.Context, days int) (map[string][]input.OHLCV, error)
+
+	// LoadRecentIndexOHLCV returns the last N calendar days of index OHLCV
+	// for the given symbol, sorted oldest-first (needed for weekly derivation).
+	LoadRecentIndexOHLCV(ctx context.Context, symbol string, days int) ([]input.OHLCV, error)
+
+	// LoadLatestForeignNetBuy returns symbol → (net_volume > 0) for the most
+	// recent trading date available in stock_foreign_flow.
+	LoadLatestForeignNetBuy(ctx context.Context) (map[string]bool, error)
+
+	// LoadLatestMarketRegime returns the most recently stored market regime.
+	LoadLatestMarketRegime(ctx context.Context) (MarketRegime, bool, error)
+}

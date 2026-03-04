@@ -9,7 +9,6 @@ db:
   sslmode: "disable"
 
 ssi:
-  consumer_id: ""      # SSI FastConnectData consumerID
-  consumer_secret: ""  # SSI FastConnectData consumerSecret
+  consumer_id: "" # SSI FastConnectData consumerID
+  consumer_secret: "" # SSI FastConnectData consumerSecret
   base_url: "https://fc-data.ssi.com.vn"
-

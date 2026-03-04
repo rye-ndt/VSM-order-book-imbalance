@@ -235,24 +235,16 @@ func (c *SSIStockClient) fetchAllOHLC(ctx context.Context, symbol, fromDate, toD
 	return all, nil
 }
 
-// FetchAllStocksOHLCV returns daily OHLCV for all listed equities over the
-// most recent 20 calendar days (DailyOhlc, no symbol filter).
-func (c *SSIStockClient) FetchAllStocksOHLCV(ctx context.Context) ([]input.OHLCV, error) {
-	now := time.Now()
-	return c.fetchAllOHLC(ctx, "",
-		now.AddDate(0, 0, -20).Format(ssiDateFormat),
-		now.Format(ssiDateFormat),
-	)
+// FetchAllStocksOHLCV returns daily OHLCV for all listed equities in [from, to]
+// (DailyOhlc, no symbol filter).
+func (c *SSIStockClient) FetchAllStocksOHLCV(ctx context.Context, from, to time.Time) ([]input.OHLCV, error) {
+	return c.fetchAllOHLC(ctx, "", from.Format(ssiDateFormat), to.Format(ssiDateFormat))
 }
 
-// FetchVNIndexOHLCV returns daily OHLCV for the VN Index over at least the
-// given number of calendar days ending today (DailyOhlc, symbol="VNINDEX").
-func (c *SSIStockClient) FetchVNIndexOHLCV(ctx context.Context, days int) ([]input.OHLCV, error) {
-	now := time.Now()
-	return c.fetchAllOHLC(ctx, "VNINDEX",
-		now.AddDate(0, 0, -days).Format(ssiDateFormat),
-		now.Format(ssiDateFormat),
-	)
+// FetchVNIndexOHLCV returns daily OHLCV for the VN Index (symbol "VNINDEX") in
+// [from, to] (DailyOhlc).
+func (c *SSIStockClient) FetchVNIndexOHLCV(ctx context.Context, from, to time.Time) ([]input.OHLCV, error) {
+	return c.fetchAllOHLC(ctx, "VNINDEX", from.Format(ssiDateFormat), to.Format(ssiDateFormat))
 }
 
 // -------------------------------------------------------------------------
@@ -298,14 +290,15 @@ func (c *SSIStockClient) fetchStockPricePage(
 	return records, res.TotalRecord, nil
 }
 
-// FetchForeignFlow returns net foreign buy/sell activity for every equity on
-// the previous calendar day (DailyStockPrice, no symbol filter).
-func (c *SSIStockClient) FetchForeignFlow(ctx context.Context) ([]input.ForeignFlow, error) {
-	yesterday := time.Now().AddDate(0, 0, -1).Format(ssiDateFormat)
+// FetchForeignFlow returns net foreign buy/sell activity for every equity in
+// [from, to] (DailyStockPrice, no symbol filter).
+func (c *SSIStockClient) FetchForeignFlow(ctx context.Context, from, to time.Time) ([]input.ForeignFlow, error) {
+	fromStr := from.Format(ssiDateFormat)
+	toStr := to.Format(ssiDateFormat)
 
 	var all []input.ForeignFlow
 	for page := 1; ; page++ {
-		records, total, err := c.fetchStockPricePage(ctx, yesterday, yesterday, page)
+		records, total, err := c.fetchStockPricePage(ctx, fromStr, toStr, page)
 		if err != nil {
 			return nil, err
 		}

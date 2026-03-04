@@ -1,6 +1,9 @@
 package input
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // OHLCV holds one trading day of Open/High/Low/Close/Volume data for a security
 // or index. Values are in the native currency unit returned by SSI (VND).
@@ -33,19 +36,20 @@ type ForeignFlow struct {
 // the SSI FastConnectData REST API (v2). Adapters implementing this interface
 // live in internal/modules and authenticate via Bearer token obtained from
 // POST https://fc-data.ssi.com.vn/api/v2/Market/AccessToken.
+//
+// All methods accept an explicit [from, to] date window so callers (e.g. the
+// cron job) can request only the days that are actually missing from the store,
+// avoiding redundant API calls for already-persisted data.
 type StockDataClient interface {
-	// FetchAllStocksOHLCV returns daily OHLCV for every listed equity over
-	// the most recent 20 calendar days, paginating through all available
-	// results from the DailyOhlc endpoint.
-	FetchAllStocksOHLCV(ctx context.Context) ([]OHLCV, error)
+	// FetchAllStocksOHLCV returns daily OHLCV for every listed equity in the
+	// [from, to] date range, paginating through all results from DailyOhlc.
+	FetchAllStocksOHLCV(ctx context.Context, from, to time.Time) ([]OHLCV, error)
 
-	// FetchForeignFlow returns net foreign buy/sell volume and value for
-	// every equity on the most recent completed trading day, using data
-	// from the DailyStockPrice endpoint.
-	FetchForeignFlow(ctx context.Context) ([]ForeignFlow, error)
+	// FetchForeignFlow returns net foreign buy/sell volume and value for every
+	// equity in the [from, to] date range, using the DailyStockPrice endpoint.
+	FetchForeignFlow(ctx context.Context, from, to time.Time) ([]ForeignFlow, error)
 
-	// FetchVNIndexOHLCV returns daily OHLCV for the VN Index (symbol
-	// "VNINDEX") over at least the given number of calendar days ending
-	// today, using the DailyOhlc endpoint.
-	FetchVNIndexOHLCV(ctx context.Context, days int) ([]OHLCV, error)
+	// FetchVNIndexOHLCV returns daily OHLCV for the VN Index (symbol "VNINDEX")
+	// in the [from, to] date range, using the DailyOhlc endpoint.
+	FetchVNIndexOHLCV(ctx context.Context, from, to time.Time) ([]OHLCV, error)
 }

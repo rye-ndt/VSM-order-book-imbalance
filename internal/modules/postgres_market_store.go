@@ -1,0 +1,435 @@
+package modules
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/example/order-book-imbalance/internal/interface/input"
+	"github.com/example/order-book-imbalance/internal/interface/output"
+)
+
+const ssiStoreDateFormat = "02/01/2006"
+
+var _ output.MarketStore = (*PostgresMarketStore)(nil)
+
+type PostgresMarketStore struct {
+	db *sql.DB
+}
+
+func NewPostgresMarketStore(db *sql.DB) *PostgresMarketStore {
+	return &PostgresMarketStore{db: db}
+}
+
+func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS stock_ohlcv (
+			symbol       TEXT           NOT NULL,
+			market       TEXT           NOT NULL,
+			trading_date DATE           NOT NULL,
+			open         NUMERIC(18, 2) NOT NULL,
+			high         NUMERIC(18, 2) NOT NULL,
+			low          NUMERIC(18, 2) NOT NULL,
+			close        NUMERIC(18, 2) NOT NULL,
+			volume       NUMERIC(22, 0) NOT NULL,
+			value        NUMERIC(22, 2) NOT NULL,
+			created_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			updated_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (symbol, trading_date)
+		);
+
+		CREATE TABLE IF NOT EXISTS stock_foreign_flow (
+			symbol       TEXT           NOT NULL,
+			trading_date DATE           NOT NULL,
+			buy_volume   NUMERIC(22, 0) NOT NULL,
+			sell_volume  NUMERIC(22, 0) NOT NULL,
+			buy_value    NUMERIC(22, 2) NOT NULL,
+			sell_value   NUMERIC(22, 2) NOT NULL,
+			net_volume   NUMERIC(22, 0) NOT NULL,
+			net_value    NUMERIC(22, 2) NOT NULL,
+			created_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			updated_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (symbol, trading_date)
+		);
+
+		CREATE TABLE IF NOT EXISTS index_ohlcv (
+			symbol       TEXT           NOT NULL,
+			market       TEXT           NOT NULL,
+			trading_date DATE           NOT NULL,
+			open         NUMERIC(18, 2) NOT NULL,
+			high         NUMERIC(18, 2) NOT NULL,
+			low          NUMERIC(18, 2) NOT NULL,
+			close        NUMERIC(18, 2) NOT NULL,
+			volume       NUMERIC(22, 0) NOT NULL,
+			value        NUMERIC(22, 2) NOT NULL,
+			created_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			updated_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (symbol, trading_date)
+		);
+
+		CREATE TABLE IF NOT EXISTS stock_metrics (
+			symbol               TEXT           NOT NULL,
+			trading_date         DATE           NOT NULL,
+			cpr                  NUMERIC(8, 6)  NOT NULL,
+			upper_wick_ratio     NUMERIC(8, 6)  NOT NULL,
+			ma20_volume          NUMERIC(22, 0) NOT NULL,
+			volume_ratio_1d      NUMERIC(10, 4) NOT NULL,
+			volume_trend_3d      TEXT           NOT NULL,
+			vpr                  TEXT           NOT NULL,
+			momentum_score       SMALLINT       NOT NULL,
+			candle_pattern       TEXT           NOT NULL,
+			resistance_distance  NUMERIC(10, 6) NOT NULL,
+			above_20ma           BOOLEAN        NOT NULL,
+			should_monitor_today BOOLEAN        NOT NULL DEFAULT FALSE,
+			final_score          SMALLINT       NOT NULL DEFAULT 0,
+			position_size_flag   TEXT           NOT NULL DEFAULT 'Skip',
+			created_at           TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			updated_at           TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (symbol, trading_date)
+		);
+
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS should_monitor_today BOOLEAN NOT NULL DEFAULT FALSE;
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS final_score         SMALLINT NOT NULL DEFAULT 0;
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS position_size_flag  TEXT     NOT NULL DEFAULT 'Skip';
+
+		CREATE TABLE IF NOT EXISTS market_regime (
+			trading_date DATE        NOT NULL PRIMARY KEY,
+			regime       TEXT        NOT NULL,
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	return nil
+}
+
+// -------------------------------------------------------------------------
+// OHLCV upserts (shared between stock_ohlcv and index_ohlcv)
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) upsertOHLCV(ctx context.Context, table string, records []input.OHLCV) error {
+	if len(records) == 0 {
+		return nil
+	}
+	const cols = 9
+	args := make([]any, 0, len(records)*cols)
+	rows := make([]string, 0, len(records))
+
+	for i, r := range records {
+		date, _ := time.Parse(ssiStoreDateFormat, r.TradingDate)
+		b := i * cols
+		rows = append(rows, fmt.Sprintf(
+			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NOW())",
+			b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9,
+		))
+		args = append(args, r.Symbol, r.Market, date, r.Open, r.High, r.Low, r.Close, r.Volume, r.Value)
+	}
+
+	q := fmt.Sprintf(`
+		INSERT INTO %s (symbol, market, trading_date, open, high, low, close, volume, value, updated_at)
+		VALUES %s
+		ON CONFLICT (symbol, trading_date) DO UPDATE SET
+			market     = EXCLUDED.market,
+			open       = EXCLUDED.open,
+			high       = EXCLUDED.high,
+			low        = EXCLUDED.low,
+			close      = EXCLUDED.close,
+			volume     = EXCLUDED.volume,
+			value      = EXCLUDED.value,
+			updated_at = NOW()
+	`, table, strings.Join(rows, ","))
+
+	_, err := s.db.ExecContext(ctx, q, args...)
+	return err
+}
+
+func (s *PostgresMarketStore) batchOHLCV(ctx context.Context, table string, records []input.OHLCV) error {
+	const batchSize = 500
+	for i := 0; i < len(records); i += batchSize {
+		end := min(i+batchSize, len(records))
+		if err := s.upsertOHLCV(ctx, table, records[i:end]); err != nil {
+			return fmt.Errorf("%s batch at %d: %w", table, i, err)
+		}
+	}
+	return nil
+}
+
+func (s *PostgresMarketStore) UpsertStockOHLCV(ctx context.Context, records []input.OHLCV) error {
+	return s.batchOHLCV(ctx, "stock_ohlcv", records)
+}
+
+func (s *PostgresMarketStore) UpsertIndexOHLCV(ctx context.Context, records []input.OHLCV) error {
+	return s.batchOHLCV(ctx, "index_ohlcv", records)
+}
+
+// -------------------------------------------------------------------------
+// Foreign flow upsert
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) UpsertForeignFlow(ctx context.Context, records []input.ForeignFlow) error {
+	if len(records) == 0 {
+		return nil
+	}
+	const cols = 8
+	const batchSize = 500
+
+	for start := 0; start < len(records); start += batchSize {
+		end := min(start+batchSize, len(records))
+		batch := records[start:end]
+
+		args := make([]any, 0, len(batch)*cols)
+		rows := make([]string, 0, len(batch))
+
+		for i, r := range batch {
+			date, _ := time.Parse(ssiStoreDateFormat, r.TradingDate)
+			b := i * cols
+			rows = append(rows, fmt.Sprintf(
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NOW())",
+				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8,
+			))
+			args = append(args, r.Symbol, date, r.BuyVolume, r.SellVolume, r.BuyValue, r.SellValue, r.NetVolume, r.NetValue)
+		}
+
+		q := fmt.Sprintf(`
+			INSERT INTO stock_foreign_flow
+				(symbol, trading_date, buy_volume, sell_volume, buy_value, sell_value, net_volume, net_value, updated_at)
+			VALUES %s
+			ON CONFLICT (symbol, trading_date) DO UPDATE SET
+				buy_volume  = EXCLUDED.buy_volume,
+				sell_volume = EXCLUDED.sell_volume,
+				buy_value   = EXCLUDED.buy_value,
+				sell_value  = EXCLUDED.sell_value,
+				net_volume  = EXCLUDED.net_volume,
+				net_value   = EXCLUDED.net_value,
+				updated_at  = NOW()
+		`, strings.Join(rows, ","))
+
+		if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
+			return fmt.Errorf("foreign_flow batch at %d: %w", start, err)
+		}
+	}
+	return nil
+}
+
+// -------------------------------------------------------------------------
+// Stock metrics upsert
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) UpsertStockMetrics(ctx context.Context, records []output.StockMetrics) error {
+	if len(records) == 0 {
+		return nil
+	}
+	const cols = 15
+	const batchSize = 500
+
+	for start := 0; start < len(records); start += batchSize {
+		end := min(start+batchSize, len(records))
+		batch := records[start:end]
+
+		args := make([]any, 0, len(batch)*cols)
+		rows := make([]string, 0, len(batch))
+
+		for i, m := range batch {
+			date, _ := time.Parse(ssiStoreDateFormat, m.TradingDate)
+			b := i * cols
+			rows = append(rows, fmt.Sprintf(
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NOW())",
+				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15,
+			))
+			args = append(args,
+				m.Symbol, date,
+				m.CPR, m.UpperWickRatio,
+				m.MA20Volume, m.VolumeRatio1D,
+				string(m.VolumeTrend3D), string(m.VPR),
+				m.MomentumScore, string(m.CandlePattern),
+				m.ResistanceDistance, m.Above20MA,
+				m.ShouldMonitorToday, m.FinalScore, m.PositionSizeFlag,
+			)
+		}
+
+		q := fmt.Sprintf(`
+			INSERT INTO stock_metrics (
+				symbol, trading_date,
+				cpr, upper_wick_ratio,
+				ma20_volume, volume_ratio_1d,
+				volume_trend_3d, vpr,
+				momentum_score, candle_pattern,
+				resistance_distance, above_20ma,
+				should_monitor_today, final_score, position_size_flag,
+				updated_at
+			) VALUES %s
+			ON CONFLICT (symbol, trading_date) DO UPDATE SET
+				cpr                  = EXCLUDED.cpr,
+				upper_wick_ratio     = EXCLUDED.upper_wick_ratio,
+				ma20_volume          = EXCLUDED.ma20_volume,
+				volume_ratio_1d      = EXCLUDED.volume_ratio_1d,
+				volume_trend_3d      = EXCLUDED.volume_trend_3d,
+				vpr                  = EXCLUDED.vpr,
+				momentum_score       = EXCLUDED.momentum_score,
+				candle_pattern       = EXCLUDED.candle_pattern,
+				resistance_distance  = EXCLUDED.resistance_distance,
+				above_20ma           = EXCLUDED.above_20ma,
+				should_monitor_today = EXCLUDED.should_monitor_today,
+				final_score          = EXCLUDED.final_score,
+				position_size_flag   = EXCLUDED.position_size_flag,
+				updated_at           = NOW()
+		`, strings.Join(rows, ","))
+
+		if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
+			return fmt.Errorf("stock_metrics batch at %d: %w", start, err)
+		}
+	}
+	return nil
+}
+
+// -------------------------------------------------------------------------
+// Market regime upsert
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) UpsertMarketRegime(ctx context.Context, regime output.MarketRegime) error {
+	date, _ := time.Parse(ssiStoreDateFormat, regime.TradingDate)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO market_regime (trading_date, regime, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (trading_date) DO UPDATE SET
+			regime     = EXCLUDED.regime,
+			updated_at = NOW()
+	`, date, string(regime.Regime))
+	return err
+}
+
+// -------------------------------------------------------------------------
+// Foreign net buy + regime loaders (used for scoring inputs)
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) LoadLatestForeignNetBuy(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol, net_volume > 0
+		FROM stock_foreign_flow
+		WHERE trading_date = (SELECT MAX(trading_date) FROM stock_foreign_flow)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load latest foreign net buy: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]bool)
+	for rows.Next() {
+		var symbol string
+		var netBuy bool
+		if err := rows.Scan(&symbol, &netBuy); err != nil {
+			return nil, fmt.Errorf("scan foreign net buy: %w", err)
+		}
+		result[symbol] = netBuy
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresMarketStore) LoadLatestMarketRegime(ctx context.Context) (output.MarketRegime, bool, error) {
+	var tradingDate string
+	var regime string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT TO_CHAR(trading_date, 'DD/MM/YYYY'), regime
+		FROM market_regime
+		ORDER BY trading_date DESC
+		LIMIT 1
+	`).Scan(&tradingDate, &regime)
+	if err == sql.ErrNoRows {
+		return output.MarketRegime{}, false, nil
+	}
+	if err != nil {
+		return output.MarketRegime{}, false, fmt.Errorf("load latest market regime: %w", err)
+	}
+	return output.MarketRegime{
+		TradingDate: tradingDate,
+		Regime:      output.RegimeLabel(regime),
+	}, true, nil
+}
+
+// -------------------------------------------------------------------------
+// Latest-date queries
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) latestDate(ctx context.Context, q string, args ...any) (time.Time, bool, error) {
+	var t sql.NullTime
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&t); err != nil {
+		return time.Time{}, false, err
+	}
+	if !t.Valid {
+		return time.Time{}, false, nil
+	}
+	return t.Time, true, nil
+}
+
+func (s *PostgresMarketStore) LatestStockOHLCVDate(ctx context.Context) (time.Time, bool, error) {
+	return s.latestDate(ctx, `SELECT MAX(trading_date) FROM stock_ohlcv`)
+}
+
+func (s *PostgresMarketStore) LatestForeignFlowDate(ctx context.Context) (time.Time, bool, error) {
+	return s.latestDate(ctx, `SELECT MAX(trading_date) FROM stock_foreign_flow`)
+}
+
+func (s *PostgresMarketStore) LatestIndexOHLCVDate(ctx context.Context, symbol string) (time.Time, bool, error) {
+	return s.latestDate(ctx, `SELECT MAX(trading_date) FROM index_ohlcv WHERE symbol = $1`, symbol)
+}
+
+// -------------------------------------------------------------------------
+// History loaders for metric computation
+// -------------------------------------------------------------------------
+
+func (s *PostgresMarketStore) LoadRecentStockOHLCV(ctx context.Context, days int) (map[string][]input.OHLCV, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol, market,
+		       TO_CHAR(trading_date, 'DD/MM/YYYY'),
+		       open, high, low, close, volume, value
+		FROM stock_ohlcv
+		WHERE trading_date >= CURRENT_DATE - ($1 * INTERVAL '1 day')
+		ORDER BY symbol, trading_date DESC
+	`, days)
+	if err != nil {
+		return nil, fmt.Errorf("load recent stock ohlcv: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]input.OHLCV)
+	for rows.Next() {
+		var r input.OHLCV
+		if err := rows.Scan(&r.Symbol, &r.Market, &r.TradingDate,
+			&r.Open, &r.High, &r.Low, &r.Close, &r.Volume, &r.Value); err != nil {
+			return nil, fmt.Errorf("scan stock ohlcv: %w", err)
+		}
+		result[r.Symbol] = append(result[r.Symbol], r)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresMarketStore) LoadRecentIndexOHLCV(ctx context.Context, symbol string, days int) ([]input.OHLCV, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol, market,
+		       TO_CHAR(trading_date, 'DD/MM/YYYY'),
+		       open, high, low, close, volume, value
+		FROM index_ohlcv
+		WHERE symbol = $1
+		  AND trading_date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+		ORDER BY trading_date ASC
+	`, symbol, days)
+	if err != nil {
+		return nil, fmt.Errorf("load recent index ohlcv: %w", err)
+	}
+	defer rows.Close()
+
+	var result []input.OHLCV
+	for rows.Next() {
+		var r input.OHLCV
+		if err := rows.Scan(&r.Symbol, &r.Market, &r.TradingDate,
+			&r.Open, &r.High, &r.Low, &r.Close, &r.Volume, &r.Value); err != nil {
+			return nil, fmt.Errorf("scan index ohlcv: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}

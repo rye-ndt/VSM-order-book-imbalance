@@ -4,7 +4,7 @@
       "Bash(python3:*)",
       "Bash(pip3 install:*)",
       "Bash(go build:*)",
-      "Bash(git:*)"
+      "Bash(go get:*)"
     ]
   }
 }
