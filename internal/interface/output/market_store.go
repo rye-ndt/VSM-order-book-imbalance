@@ -7,6 +7,15 @@ import (
 	"github.com/example/order-book-imbalance/internal/interface/input"
 )
 
+// SignalRecord is written to signal_log whenever an ATO signal fires.
+type SignalRecord struct {
+	Symbol         string
+	FinalScore     int
+	IndicatedPrice float64
+	TPPrice        float64
+	FiredAt        time.Time
+}
+
 type VolumeTrend string
 
 const (
@@ -102,4 +111,23 @@ type MarketStore interface {
 
 	// LoadLatestMarketRegime returns the most recently stored market regime.
 	LoadLatestMarketRegime(ctx context.Context) (MarketRegime, bool, error)
+
+	// LoadMonitoredStocks returns the symbols marked should_monitor_today = true
+	// for the most recent trading date in stock_metrics.
+	LoadMonitoredStocks(ctx context.Context) ([]string, error)
+
+	// LoadWatchlist returns all symbols with position_size_flag != 'Skip' on
+	// the most recent trading date, along with their pre-computed final scores.
+	// This is the authoritative morning watchlist: nightly scoring and regime
+	// thresholds are already baked into position_size_flag.
+	LoadWatchlist(ctx context.Context) ([]WatchlistEntry, error)
+
+	// LogSignal persists a signal_log row when an ATO signal fires.
+	LogSignal(ctx context.Context, r SignalRecord) error
+}
+
+// WatchlistEntry is one row from the morning watchlist query.
+type WatchlistEntry struct {
+	Symbol     string
+	FinalScore int
 }

@@ -345,6 +345,20 @@ func ComputeFinalScore(m output.StockMetrics) (int, string) {
 	}
 }
 
+// RegimeScoreThreshold returns the minimum FinalScore for a signal to fire
+// in the morning session. These are the half-position thresholds from
+// ComputeFinalScore, re-expressed here for the ATO signal gate.
+func RegimeScoreThreshold(regime output.RegimeLabel) int {
+	switch regime {
+	case output.RegimeBull:
+		return 7
+	case output.RegimeBear:
+		return 9
+	default: // Choppy
+		return 8
+	}
+}
+
 // ShouldMonitorToday returns true when a stock passes all daily screening
 // criteria:
 //   - Bullish setup: CPR >= 0.7 OR hammer/doji pattern

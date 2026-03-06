@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/robfig/cron/v3"
 	// pgx stdlib adapter registers the "pgx" driver name with database/sql.
@@ -47,6 +48,13 @@ func main() {
 	// -----------------------------------------------------------------------
 	stockClient := modules.NewSSIStockClient(cfg.SSI)
 	store := modules.NewPostgresMarketStore(db)
+	obClient := modules.NewSSIOrderBookClient(cfg.SSI)
+
+	notifier, err := modules.NewTelegramNotifier(cfg.Telegram)
+	if err != nil {
+		log.Printf("telegram notifier disabled: %v", err)
+		notifier = nil
+	}
 
 	// Run schema migration once at startup before the first job execution.
 	if err := store.Migrate(context.Background()); err != nil {
@@ -54,12 +62,26 @@ func main() {
 	}
 
 	// -----------------------------------------------------------------------
-	// Cron scheduler – runs market data fetch every day at 03:30
+	// Cron scheduler – all times are Vietnam local time (ICT, UTC+7)
 	// -----------------------------------------------------------------------
-	c := cron.New()
+	ict, err := time.LoadLocation("Asia/Ho_Chi_Minh")
+	if err != nil {
+		log.Fatalf("load Asia/Ho_Chi_Minh timezone: %v", err)
+	}
+
+	c := cron.New(cron.WithLocation(ict))
+
+	// 03:30 ICT – fetch previous day's market data and compute stock metrics.
 	if _, err := c.AddJob("30 3 * * *", job.NewMarketDataJob(stockClient, store)); err != nil {
 		log.Fatalf("register market data cron job: %v", err)
 	}
+
+	// 09:00 ICT – monitor ATO order book for stocks flagged overnight.
+	// The job self-terminates at 09:15 ICT via an internal context deadline.
+	if _, err := c.AddJob("0 9 * * *", job.NewATOMonitorJob(store, obClient, notifier)); err != nil {
+		log.Fatalf("register ATO monitor cron job: %v", err)
+	}
+
 	c.Start()
 	defer c.Stop()
 

@@ -11,4 +11,9 @@ db:
 ssi:
   consumer_id: "" # SSI FastConnectData consumerID
   consumer_secret: "" # SSI FastConnectData consumerSecret
-  base_url: "https://fc-data.ssi.com.vn"
+  base_url: "https://fc-data.ssi.com.vn"       # REST API host
+  stream_url: "wss://fcmarket.ssi.com.vn/..."   # IDS WebSocket host — set full URL + path per spec
+
+telegram:
+  bot_token: "" # from @BotFather — create a bot, copy the token here
+  chat_id: 0    # your Telegram user ID — send /start to the bot, then read it from getUpdates

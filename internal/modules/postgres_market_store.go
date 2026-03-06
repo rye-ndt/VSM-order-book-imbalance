@@ -100,6 +100,15 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		CREATE TABLE IF NOT EXISTS signal_log (
+			id           BIGSERIAL      PRIMARY KEY,
+			symbol       TEXT           NOT NULL,
+			final_score  SMALLINT       NOT NULL,
+			entry_price  NUMERIC(18, 2) NOT NULL,
+			tp_price     NUMERIC(18, 2) NOT NULL,
+			fired_at     TIMESTAMPTZ    NOT NULL
+		);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -405,6 +414,62 @@ func (s *PostgresMarketStore) LoadRecentStockOHLCV(ctx context.Context, days int
 		result[r.Symbol] = append(result[r.Symbol], r)
 	}
 	return result, rows.Err()
+}
+
+func (s *PostgresMarketStore) LoadWatchlist(ctx context.Context) ([]output.WatchlistEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol, final_score
+		FROM stock_metrics
+		WHERE position_size_flag != 'Skip'
+		  AND trading_date = (SELECT MAX(trading_date) FROM stock_metrics)
+		ORDER BY final_score DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load watchlist: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []output.WatchlistEntry
+	for rows.Next() {
+		var e output.WatchlistEntry
+		if err := rows.Scan(&e.Symbol, &e.FinalScore); err != nil {
+			return nil, fmt.Errorf("scan watchlist entry: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (s *PostgresMarketStore) LogSignal(ctx context.Context, r output.SignalRecord) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO signal_log (symbol, final_score, entry_price, tp_price, fired_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, r.Symbol, r.FinalScore, r.IndicatedPrice, r.TPPrice, r.FiredAt)
+	return err
+}
+
+func (s *PostgresMarketStore) LoadMonitoredStocks(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol
+		FROM stock_metrics
+		WHERE should_monitor_today = true
+		  AND trading_date = (SELECT MAX(trading_date) FROM stock_metrics)
+		ORDER BY symbol
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load monitored stocks: %w", err)
+	}
+	defer rows.Close()
+
+	var symbols []string
+	for rows.Next() {
+		var sym string
+		if err := rows.Scan(&sym); err != nil {
+			return nil, fmt.Errorf("scan monitored stock: %w", err)
+		}
+		symbols = append(symbols, sym)
+	}
+	return symbols, rows.Err()
 }
 
 func (s *PostgresMarketStore) LoadRecentIndexOHLCV(ctx context.Context, symbol string, days int) ([]input.OHLCV, error) {
