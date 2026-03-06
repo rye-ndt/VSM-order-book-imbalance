@@ -8,12 +8,32 @@ import (
 )
 
 // SignalRecord is written to signal_log whenever an ATO signal fires.
+// It captures a full feature snapshot (Layer 1 of the event study dataset) so
+// that every observable at signal time is preserved alongside the outcome data
+// that will be back-filled once T+1 and T+2 prices are available.
 type SignalRecord struct {
 	Symbol         string
 	FinalScore     int
-	IndicatedPrice float64
+	IndicatedPrice float64 // ATO estimated clearing price; also written to entry_price at fire time
 	TPPrice        float64
 	FiredAt        time.Time
+
+	// Order-book snapshot at the moment the signal fired.
+	OpenGap         float64   // (indicated_price - ref_price) / ref_price
+	ImbalanceRatio  float64   // bid/ask volume ratio from the triggering snapshot
+	SnapshotCount   int       // consecutive stable snapshots at fire time (sanity check; should be 3)
+	SnapshotFiredAt time.Time // CapturedAt timestamp of the triggering snapshot
+
+	// Nightly metrics snapshotted from stock_metrics / market_regime at fire time.
+	Regime             RegimeLabel
+	CandlePattern      CandlePattern
+	VPR                VPRLabel
+	VolumeTrend        VolumeTrend
+	VolumeRatio        float64
+	MomentumScore      int
+	ResistanceDistance float64
+	Above20MA          bool
+	PositionSizeFlag   string
 }
 
 type VolumeTrend string
@@ -127,7 +147,18 @@ type MarketStore interface {
 }
 
 // WatchlistEntry is one row from the morning watchlist query.
+// All metric fields are snapshotted here at session start so pollOnce can
+// populate SignalRecord without any DB round-trip during the hot polling loop.
 type WatchlistEntry struct {
-	Symbol     string
-	FinalScore int
+	Symbol             string
+	FinalScore         int
+	Regime             RegimeLabel
+	CandlePattern      CandlePattern
+	VPR                VPRLabel
+	VolumeTrend        VolumeTrend
+	VolumeRatio        float64
+	MomentumScore      int
+	ResistanceDistance float64
+	Above20MA          bool
+	PositionSizeFlag   string
 }

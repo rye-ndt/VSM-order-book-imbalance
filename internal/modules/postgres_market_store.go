@@ -109,6 +109,21 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 			tp_price     NUMERIC(18, 2) NOT NULL,
 			fired_at     TIMESTAMPTZ    NOT NULL
 		);
+
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS indicated_price     NUMERIC(18, 2) NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS open_gap            NUMERIC(10, 6) NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS imbalance_ratio     NUMERIC(10, 4) NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS snapshot_count      SMALLINT       NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS snapshot_fired_at   TIMESTAMPTZ;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS regime              TEXT           NOT NULL DEFAULT 'Choppy';
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS candle_pattern      TEXT           NOT NULL DEFAULT 'Neutral';
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS vpr                 TEXT           NOT NULL DEFAULT 'Neutral';
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS volume_trend        TEXT           NOT NULL DEFAULT 'flat';
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS volume_ratio        NUMERIC(10, 4) NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS momentum_score      SMALLINT       NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS resistance_distance NUMERIC(10, 6) NOT NULL DEFAULT 0;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS above_20ma          BOOLEAN        NOT NULL DEFAULT FALSE;
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS position_size_flag  TEXT           NOT NULL DEFAULT 'Skip';
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -418,11 +433,25 @@ func (s *PostgresMarketStore) LoadRecentStockOHLCV(ctx context.Context, days int
 
 func (s *PostgresMarketStore) LoadWatchlist(ctx context.Context) ([]output.WatchlistEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol, final_score
-		FROM stock_metrics
-		WHERE position_size_flag != 'Skip'
-		  AND trading_date = (SELECT MAX(trading_date) FROM stock_metrics)
-		ORDER BY final_score DESC
+		SELECT
+			sm.symbol,
+			sm.final_score,
+			COALESCE(mr.regime, 'Choppy'),
+			sm.candle_pattern,
+			sm.vpr,
+			sm.volume_trend_3d,
+			sm.volume_ratio_1d,
+			sm.momentum_score,
+			sm.resistance_distance,
+			sm.above_20ma,
+			sm.position_size_flag
+		FROM stock_metrics sm
+		LEFT JOIN LATERAL (
+			SELECT regime FROM market_regime ORDER BY trading_date DESC LIMIT 1
+		) mr ON true
+		WHERE sm.position_size_flag != 'Skip'
+		  AND sm.trading_date = (SELECT MAX(trading_date) FROM stock_metrics)
+		ORDER BY sm.final_score DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("load watchlist: %w", err)
@@ -432,19 +461,47 @@ func (s *PostgresMarketStore) LoadWatchlist(ctx context.Context) ([]output.Watch
 	var entries []output.WatchlistEntry
 	for rows.Next() {
 		var e output.WatchlistEntry
-		if err := rows.Scan(&e.Symbol, &e.FinalScore); err != nil {
+		var regime, candlePattern, vpr, volumeTrend string
+		if err := rows.Scan(
+			&e.Symbol, &e.FinalScore,
+			&regime, &candlePattern, &vpr, &volumeTrend,
+			&e.VolumeRatio, &e.MomentumScore, &e.ResistanceDistance,
+			&e.Above20MA, &e.PositionSizeFlag,
+		); err != nil {
 			return nil, fmt.Errorf("scan watchlist entry: %w", err)
 		}
+		e.Regime = output.RegimeLabel(regime)
+		e.CandlePattern = output.CandlePattern(candlePattern)
+		e.VPR = output.VPRLabel(vpr)
+		e.VolumeTrend = output.VolumeTrend(volumeTrend)
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
 }
 
 func (s *PostgresMarketStore) LogSignal(ctx context.Context, r output.SignalRecord) error {
+	var snapshotFiredAt *time.Time
+	if !r.SnapshotFiredAt.IsZero() {
+		snapshotFiredAt = &r.SnapshotFiredAt
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO signal_log (symbol, final_score, entry_price, tp_price, fired_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, r.Symbol, r.FinalScore, r.IndicatedPrice, r.TPPrice, r.FiredAt)
+		INSERT INTO signal_log (
+			symbol, final_score, entry_price, tp_price, fired_at,
+			indicated_price, open_gap, imbalance_ratio, snapshot_count, snapshot_fired_at,
+			regime, candle_pattern, vpr, volume_trend, volume_ratio,
+			momentum_score, resistance_distance, above_20ma, position_size_flag
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15,
+			$16, $17, $18, $19
+		)
+	`,
+		r.Symbol, r.FinalScore, r.IndicatedPrice, r.TPPrice, r.FiredAt,
+		r.IndicatedPrice, r.OpenGap, r.ImbalanceRatio, r.SnapshotCount, snapshotFiredAt,
+		string(r.Regime), string(r.CandlePattern), string(r.VPR), string(r.VolumeTrend), r.VolumeRatio,
+		r.MomentumScore, r.ResistanceDistance, r.Above20MA, r.PositionSizeFlag,
+	)
 	return err
 }
 

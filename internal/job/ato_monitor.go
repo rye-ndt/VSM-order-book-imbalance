@@ -85,10 +85,10 @@ func (j *ATOMonitorJob) Run() {
 		return
 	}
 
-	scores := make(map[string]int, len(watchlist))
+	entries := make(map[string]output.WatchlistEntry, len(watchlist))
 	active := make(map[string]bool, len(watchlist))
 	for _, e := range watchlist {
-		scores[e.Symbol] = e.FinalScore
+		entries[e.Symbol] = e
 		active[e.Symbol] = true
 	}
 	log.Printf("[ato] monitoring %d stocks until 09:15 ICT", len(active))
@@ -133,7 +133,7 @@ func (j *ATOMonitorJob) Run() {
 				resetStabilityWindows(windows)
 				log.Printf("[ato] 09:14 ICT — signal window closed, stability windows reset")
 			}
-			pollOnce(ctx, j.store, j.obClient, j.notifier, active, windows, scores, fired, scoreThreshold, signalsStopped)
+			pollOnce(ctx, j.store, j.obClient, j.notifier, active, windows, entries, fired, scoreThreshold, signalsStopped)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func pollOnce(
 	notifier output.Notifier,
 	active map[string]bool,
 	windows map[string]*calculator.StabilityWindow,
-	scores map[string]int,
+	entries map[string]output.WatchlistEntry,
 	fired map[string]bool,
 	scoreThreshold int,
 	signalsStopped bool,
@@ -194,7 +194,8 @@ func pollOnce(
 			continue
 		}
 
-		reason, ok := checkSignalGate(snap, scores[sym], scoreThreshold)
+		entry := entries[sym]
+		reason, ok := checkSignalGate(snap, entry.FinalScore, scoreThreshold)
 		if !ok {
 			log.Printf("[ato] %s: signal gate blocked — %s", sym, reason)
 			continue
@@ -204,7 +205,7 @@ func pollOnce(
 		tpPrice := snap.IndicatedPrice * atoTPRatio
 		msg := fmt.Sprintf(
 			"ATO SIGNAL: %s\nRatio: %.2fx  Score: %d  Regime threshold: %d\nIndicated: %.0f  Ceiling: %.0f  Ref: %.0f\nTP: %.0f\nStable snapshots: %d",
-			sym, analysis.ImbalanceRatio, scores[sym], scoreThreshold,
+			sym, analysis.ImbalanceRatio, entry.FinalScore, scoreThreshold,
 			snap.IndicatedPrice, snap.CeilingPrice, snap.RefPrice,
 			tpPrice,
 			windows[sym].StableCount,
@@ -215,12 +216,30 @@ func pollOnce(
 				log.Printf("[ato] notify: %v", err)
 			}
 		}
+
+		var openGap float64
+		if snap.RefPrice > 0 {
+			openGap = (snap.IndicatedPrice - snap.RefPrice) / snap.RefPrice
+		}
 		rec := output.SignalRecord{
-			Symbol:         sym,
-			FinalScore:     scores[sym],
-			IndicatedPrice: snap.IndicatedPrice,
-			TPPrice:        tpPrice,
-			FiredAt:        time.Now(),
+			Symbol:             sym,
+			FinalScore:         entry.FinalScore,
+			IndicatedPrice:     snap.IndicatedPrice,
+			TPPrice:            tpPrice,
+			FiredAt:            time.Now(),
+			OpenGap:            openGap,
+			ImbalanceRatio:     analysis.ImbalanceRatio,
+			SnapshotCount:      windows[sym].StableCount,
+			SnapshotFiredAt:    analysis.CapturedAt,
+			Regime:             entry.Regime,
+			CandlePattern:      entry.CandlePattern,
+			VPR:                entry.VPR,
+			VolumeTrend:        entry.VolumeTrend,
+			VolumeRatio:        entry.VolumeRatio,
+			MomentumScore:      entry.MomentumScore,
+			ResistanceDistance: entry.ResistanceDistance,
+			Above20MA:          entry.Above20MA,
+			PositionSizeFlag:   entry.PositionSizeFlag,
 		}
 		if err := store.LogSignal(ctx, rec); err != nil {
 			log.Printf("[ato] %s: log signal: %v", sym, err)

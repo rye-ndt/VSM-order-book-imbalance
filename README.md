@@ -1,6 +1,6 @@
 # Order Book Imbalance — Vietnam Stock Market
 
-A Go service that detects high-probability ATO (At-The-Open) trading signals on the Vietnam stock market (HOSE/HNX) using order book imbalance analysis layered with candlestick context, volume confirmation, and market regime filtering.
+A Go service that detects ATO (At-The-Open) trading signals on the Vietnam stock market (HOSE/HNX) by combining pre-open order book imbalance analysis with nightly stock screening and market regime filtering. Every signal fire is persisted as a full event study record — a self-contained snapshot of all observables at signal time — designed for systematic T+2 outcome analysis.
 
 Data source: [SSI FastConnectData](https://fc-data.ssi.com.vn) API v2.
 
@@ -10,94 +10,148 @@ Data source: [SSI FastConnectData](https://fc-data.ssi.com.vn) API v2.
 
 ### Nightly pipeline (03:30 ICT)
 
-A cron job fetches and stores the previous day's market data into PostgreSQL:
+Fetches the previous day's market data in parallel and stores it to PostgreSQL:
 
-- **Stock OHLCV** — all listed equities via `DailyOhlc`
-- **Foreign flow** — net foreign buy/sell volume and value via `DailyStockPrice`
-- **VN-Index OHLCV** — for market regime calculation
+- **`stock_ohlcv`** — daily OHLCV for all listed equities (`DailyOhlc`, paginated at 1 000 records/page)
+- **`stock_foreign_flow`** — net foreign buy/sell volume and value per symbol (`DailyStockPrice`)
+- **`index_ohlcv`** — VN-Index daily OHLCV for regime calculation
 
-After storing raw data, it runs a metrics pipeline per symbol:
+Raw data is cleaned before storage: rows with zero prices, zero volume, unparseable dates, or fewer than 5 trading days in the fetch window are dropped.
+
+After storing raw data, the pipeline computes per-symbol metrics:
 
 | Metric | Description |
 |---|---|
-| CPR | Close position ratio — where did the stock close in its day range? |
-| Upper Wick Ratio | Proportion of range that is upper wick (seller pressure indicator) |
-| Volume Ratio (1D) | Today's volume vs 20-day MA |
-| Volume Trend (3D) | Rising / Flat / Falling over last 3 sessions |
+| CPR | Close position ratio — where the stock closed within its daily range (0 = low, 1 = high) |
+| Upper Wick Ratio | Upper wick as a fraction of full range — seller pressure indicator |
+| MA20 Volume | 20-day average daily volume |
+| Volume Ratio (1D) | Today's volume ÷ MA20 volume |
+| Volume Trend (3D) | Rising / Flat / Falling over the last 3 sessions |
 | VPR | Volume-Price Rating: Institutional / Neutral / Weak / Distribution / Capitulation |
-| Momentum Score | Composite score from last 5 candles (CPR + higher-lows + gap-downs) |
-| Candle Pattern | Three Soldiers, Dip Recover, Compression Breakout, Hammer, Doji, Shooting Star, Three Crows |
-| Resistance Distance | Gap to nearest overhead resistance within last 20 days |
-| Above 20MA | Whether close is above 20-day moving average |
+| Momentum Score | Composite integer score from last 5 candles: CPR signals (+1/−1 each), higher-lows streak (+2), gap-down penalty (−2 per occurrence) |
+| Candle Pattern | Three Soldiers, Dip Recover, Compression Breakout, Three Crows, Shooting Star, Hammer, Doji, Neutral |
+| Resistance Distance | Distance to nearest swing-high resistance within the last 20 days, as a fraction of close |
+| Above 20MA | Whether today's close is above the 20-day moving average |
 
-Each symbol also gets a **FinalScore** and **PositionSizeFlag** (Full / Half / Skip) based on regime-adjusted thresholds:
+Each symbol also gets a **FinalScore** and **PositionSizeFlag** (Full / Half / Skip) using regime-adjusted thresholds:
 
 | Regime | Full | Half |
 |---|---|---|
-| Bull | >= 10 | >= 7 |
-| Choppy | >= 11 | >= 8 |
-| Bear | >= 12 | >= 9 |
+| Bull | ≥ 10 | ≥ 7 |
+| Choppy | ≥ 11 | ≥ 8 |
+| Bear | ≥ 12 | ≥ 9 |
 
-The **market regime** (Bull / Bear / Choppy) is derived from VN-Index weekly closes using a Weinstein-style 20-week MA + 8-week trend direction.
+The **market regime** (Bull / Bear / Choppy) is derived from VN-Index weekly closes using a Weinstein-style 20-week MA + 8-week trend direction. Regime is recomputed each night and stored in `market_regime`.
 
-Stocks passing the daily screen (`ShouldMonitorToday`) are added to the morning watchlist.
+Symbols with `position_size_flag != 'Skip'` form the morning watchlist. The nightly `ShouldMonitorToday` screen applies as a pre-filter: CPR ≥ 0.7 or hammer/doji pattern, no Three Crows or Shooting Star, volume ratio ≥ 1.2×, VPR not Distribution, momentum score ≥ 1.
 
 ---
 
-### Morning monitor (pre-open, until 09:15 ICT)
+### Morning monitor (09:00–09:15 ICT)
 
-Polls order books every 2 seconds for watchlisted stocks via the SSI IDS WebSocket stream.
+Loads the watchlist from the previous night's `stock_metrics`, subscribes to the SSI IDS WebSocket stream (`X` channel), and polls every 2 seconds.
 
-**Signal fires when all conditions hold across 3 consecutive snapshots:**
+**Signal fires when all 8 conditions hold across 3 consecutive snapshots:**
 
-1. Imbalance ratio >= 3.0x (total bid volume / total ask volume)
-2. Imbalance is organic — not concentrated in 1-2 large orders (largest single bid < 40% of total)
-3. Bid depth spans >= 5 price levels
-4. No ask wall within 3% above indicated price (>= 30% of ask volume at a single level)
-5. Indicated price stable within 1% across the 3-snapshot window
-6. Indicated price < ceiling price (not already at tran)
+1. Bid/ask volume ratio ≥ 3.0×
+2. No single bid order dominates — largest bid < 40% of total bid volume (anti-spoof filter)
+3. Bid depth spans ≥ 5 price levels
+4. No ask wall within 3% above indicated price (no single ask level ≥ 30% of total ask volume)
+5. Indicated price stable within ±1% across the 3-snapshot window
+6. Indicated price < ceiling (tran) price
 7. Gap from prior-day close < 5%
-8. Pre-computed FinalScore >= regime threshold
+8. Pre-computed FinalScore ≥ regime threshold
 
-When a signal fires, a Telegram notification is sent with the symbol, ratio, score, indicated price, and a 3% take-profit target. The signal is also persisted to `signal_log`.
+On fire: Telegram alert sent, and one row written to `signal_log` (see below).
 
-Signal window closes at 09:14 ICT (stability windows reset). Stocks with no indicated price by 09:07 ICT are dropped.
+**Session rules:** stocks with no indicated price by 09:07 ICT are dropped from the session. The signal window closes at 09:14 ICT — stability windows are reset so no new signals can fire in the final minute of the ATO period.
+
+---
+
+### Event study dataset (`signal_log`)
+
+Each signal row is a complete Layer 1 snapshot — everything observable at the moment the signal fired — structured for later T+1/T+2 outcome back-fill:
+
+| Column | Description |
+|---|---|
+| `indicated_price` | ATO estimated clearing price at fire time; immutable |
+| `entry_price` | Initially = `indicated_price`; update with actual ATO fill to measure auction slippage |
+| `tp_price` | `indicated_price × 1.03` |
+| `open_gap` | `(indicated_price − ref_price) / ref_price` |
+| `imbalance_ratio` | Bid/ask ratio from the triggering snapshot |
+| `snapshot_count` | Consecutive stable snapshots at fire (should always be 3; sanity field) |
+| `snapshot_fired_at` | `CapturedAt` of the triggering snapshot — more precise than wall-clock `fired_at` |
+| `regime` | Bull / Bear / Choppy at session start |
+| `final_score` | Composite score from nightly screening |
+| `position_size_flag` | Full / Half — sizing decision from the night before |
+| `candle_pattern` | Pattern that contributed to the score |
+| `vpr` | Volume-price relationship label |
+| `volume_trend` | Rising / Flat / Falling |
+| `volume_ratio` | Today's volume ÷ MA20 at screening time |
+| `momentum_score` | Composite momentum integer |
+| `resistance_distance` | Headroom to nearest overhead resistance |
+| `above_20ma` | Price position relative to 20-day MA |
+
+Outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns, etc.) are not yet in the schema — they will be back-filled from `stock_ohlcv` and `index_ohlcv` once T+2 prices land.
 
 ---
 
 ## Architecture
 
 ```
-cmd/app
-  └── wires everything via DI
+cmd/app/
+  main.go           — DI wiring, cron scheduler, HTTP server startup
 
 internal/
   calculator/
-    ato.go        — snapshot analysis, imbalance ratio, bid quality, ask wall detection, stability window
-    metrics.go    — per-symbol stock metrics, final score, candle patterns, regime detection
+    ato.go          — snapshot analysis: imbalance ratio, bid quality, ask wall detection, stability window
+    metrics.go      — per-symbol metrics, VPR, momentum score, candle patterns, regime detection, final score
 
   job/
-    market_data.go  — nightly OHLCV + foreign flow fetch + metrics pipeline
-    ato_monitor.go  — morning pre-open polling loop
-    cleaner.go      — data validation (strips bad rows, filters thinly-traded symbols)
+    market_data.go  — nightly fetch + clean + store + metrics pipeline
+    ato_monitor.go  — morning polling loop, signal gate, event study record assembly
+    cleaner.go      — OHLCV and foreign flow validation (row-level + symbol-level minimum history)
 
   interface/
-    input/          — port interfaces: SSIFastConnect, StockDataClient, OrderBookClient, RelationalDB
-    output/         — port interfaces: MarketStore, Notifier; shared types (StockMetrics, MarketRegime, etc.)
+    input/          — ports: StockDataClient, OrderBookClient, RelationalDB; shared types (OHLCV, ForeignFlow, OrderBookSnapshot)
+    output/         — ports: MarketStore, Notifier; shared types (StockMetrics, MarketRegime, SignalRecord, WatchlistEntry)
 
-  modules/          — adapters: SSIStockClient (REST), SSIOrderBookClient (WebSocket), PostgresMarketStore, TelegramNotifier
+  modules/          — adapters:
+                      SSIStockClient       — REST: DailyOhlc + DailyStockPrice, paginated, token-cached
+                      SSIOrderBookClient   — WebSocket IDS: Quote + Trade message handling, per-symbol snapshot cache
+                      PostgresMarketStore  — all DB reads/writes, idempotent migration
+                      TelegramNotifier     — signal alert delivery
 
-  server/           — HTTP server: GET /healthz, GET /imbalance
+  server/
+    server.go       — GET /healthz, GET /imbalance (placeholder)
+
+  config/
+    config.go       — YAML config loader (DB, SSI credentials, Telegram, HTTP listen addr)
 ```
+
+---
+
+## Database tables
+
+| Table | Contents |
+|---|---|
+| `stock_ohlcv` | Daily OHLCV for all listed equities |
+| `index_ohlcv` | Daily OHLCV for VN-Index |
+| `stock_foreign_flow` | Net foreign buy/sell volume and value per symbol per day |
+| `stock_metrics` | Nightly per-symbol metrics + final score + position size flag |
+| `market_regime` | Daily Bull / Bear / Choppy classification |
+| `signal_log` | Full event study snapshot per ATO signal fire |
+
+Schema migrations run automatically at startup via `Migrate()` using `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
 ---
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.24+
 - PostgreSQL
-- SSI FastConnectData credentials (consumerID + consumerSecret)
-- Telegram bot token + chat ID (for notifications)
+- SSI FastConnectData credentials (`consumer_id` + `consumer_secret`)
+- Telegram bot token + chat ID
 
 ## Getting started
 
