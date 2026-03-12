@@ -6,7 +6,10 @@
       "Bash(go build:*)",
       "Bash(go get:*)",
       "Bash(brew install:*)",
-      "Bash(pdftotext:*)"
+      "Bash(pdftotext:*)",
+      "Bash(curl -s -X POST \"https://fc-data.ssi.com.vn/api/v2/Market/AccessToken\" \\\\\n  -H \"Content-Type: application/json\" \\\\\n  -H \"Accept: application/json\" \\\\\n  -d '{\"consumerID\":\"64fdd21c91cf4f9abed4ead10715c6fc\",\"consumerSecret\":\"29d029f68e7e433b8ad6827b2c895463\"}' | python3 -m json.tool)",
+      "Bash(TOKEN=\"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJhdWQiOiAiNjRmZGQyMWM5MWNmNGY5YWJlZDRlYWQxMDcxNWM2ZmMiLAogICJpYXQiOiAxNzczMzI5NzgzLAogICJleHAiOiAxNzczMzU4NTgzLAogICJzY29wZSI6IHsKICAgICJJcCI6IHsKICAgICAgIklwQWRyZXNzIjogIiIsCiAgICAgICJJc1ZhbGlkIjogdHJ1ZQogICAgfSwKICAgICJUYXJnZXQiOiBbCiAgICAgIHsKICAgICAgICAiVGFyZ2V0SWQiOiAiMGMyZTRhN2JlZDYxNDdiMzllZTdmM2UyZTcyNGNiMzIiLAogICAgICAgICJUYXJnZXRVcmwiOiAiaHR0cHM6Ly9mYy10cmFkZWFwaS5zc2kuY29tLnZuIiwKICAgICAgICAiQ29ubmVjdGlvbk5hbWUiOiAiRkNUcmFkaW5nIgogICAgICB9LAogICAgICB7CiAgICAgICAgIlRhcmdldElkIjogIjVkMWI4OWNiZDc3YTQ1ZTQ5MzkyOWFhMTZlZWM5N2M1IiwKICAgICAgICAiVGFyZ2V0VXJsIjogImh0dHBzOi8vZmMtZGF0YS5zc2kuY29tLnZuIiwKICAgICAgICAiQ29ubmVjdGlvbk5hbWUiOiAiRkNEYXRhIgogICAgICB9CiAgICBdCiAgfSwKICAiY2xpIjogIlVzZXJBcHAxODUzNzgiLAogICJzdWIiOiAiMTg1Mzc4Igp9.CikiiRtPznVAWWu9u_tRXQfxpAWBt8Tv_dHODVfTQHeO3nXJOlzR-V-SJbfW4clnaHMFAscpvHxvSLazJHLR5jI1g4QdVCRFoHs5M95-uMBOzLxmiSA8IcyFXgS6q_2G0dXzhMFcsEwdpAefuzuuS-PYHjpG3Qf600JIxm-iKsCkEW2R7KkLqfdc52AGtK6LUL8jt2MKY7re7ovYoJDQiVnDqgoKzoAc8-iD9Ro9m4f0RaZWT-G-4DiSJlkVlZ84VPL0EOwfBiX6-Nv30LWIcg5NR0htkGqaatBYdPmxpqHztQUzdJeJK31fle0IRaJGyDBBNHEoKsz0NFNNiwJb8w\"\n\ncurl -s \"https://fc-data.ssi.com.vn/api/v2/Market/DailyStockPrice?Symbol=SSI&FromDate=11/03/2026&ToDate=11/03/2026&PageIndex=1&PageSize=10\" \\\\\n  -H \"Authorization: Bearer $TOKEN\" \\\\\n  -H \"Accept: application/json\" | python3 -m json.tool)",
+      "Bash(go run:*)"
     ]
   }
 }

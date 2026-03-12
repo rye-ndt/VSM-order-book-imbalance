@@ -9,11 +9,13 @@ db:
   sslmode: "disable"
 
 ssi:
-  consumer_id: "" # SSI FastConnectData consumerID
-  consumer_secret: "" # SSI FastConnectData consumerSecret
-  base_url: "https://fc-data.ssi.com.vn"       # REST API host
-  stream_url: "wss://fcmarket.ssi.com.vn/..."   # IDS WebSocket host — set full URL + path per spec
+  consumer_id: "64fdd21c91cf4f9abed4ead10715c6fc" # SSI FastConnectData consumerID
+  consumer_secret: "29d029f68e7e433b8ad6827b2c895463" # SSI FastConnectData consumerSecret
+  public_key: "PFJTQUtleVZhbHVlPjxNb2R1bHVzPnVHMXV4Y0hod3c4MzZ5dHZjUFFMS1lwdG5aNG1KK2JLSzh4Y1dEdVloL0NYdEkxMmFvZk91U1p0MnUzM1BUTjI0Q2hmTHZzZkc2d25YQXlSR3ZYMkRKSjlMMGpXemd5aFV4UHFBOFlHWlJVQURacHhQRmpPK2hsYzVjR0lEeTBDUTQyNTZ2WnVyUGtubjUwZklFUEFsZVFEWTlMQTh5dlVuRXYvaTEwcWJjTT08L01vZHVsdXM+PEV4cG9uZW50PkFRQUI8L0V4cG9uZW50PjwvUlNBS2V5VmFsdWU+"
+  private_key: "PFJTQUtleVZhbHVlPjxNb2R1bHVzPnVHMXV4Y0hod3c4MzZ5dHZjUFFMS1lwdG5aNG1KK2JLSzh4Y1dEdVloL0NYdEkxMmFvZk91U1p0MnUzM1BUTjI0Q2hmTHZzZkc2d25YQXlSR3ZYMkRKSjlMMGpXemd5aFV4UHFBOFlHWlJVQURacHhQRmpPK2hsYzVjR0lEeTBDUTQyNTZ2WnVyUGtubjUwZklFUEFsZVFEWTlMQTh5dlVuRXYvaTEwcWJjTT08L01vZHVsdXM+PEV4cG9uZW50PkFRQUI8L0V4cG9uZW50PjxQPjgyUWc4MEl5cG5keWdHSEJJc0kwTU5VQm94WEk3TTYvMytReFhmU3Byc09xcDdKNTNSMW1veGI1cTExSXNhaFlUMDl6MEZzdzNOeHNDelBPK2ZVNDJRPT08L1A+PFE+d2Z0UzFvMHFJbmVZQkJFd1ZaWHVEZlRJbm4xcSsyVWtYQy91TzZ6T3EwNEgrSHA3eVZockdYakRCM0pFZEt5bHBLLzFaUXE1a3FLQ1NuVVhaNUtaK3c9PTwvUT48RFA+ZkpDQlFKNWZsOHpJSUNabmx5ZDNXSXFiZE9EZ1hUb08vMElsZGVXU3RpdlQrbEdnaHViV01aKy9sZEYvTTlWcHBPV1A2MUhRZHlpa2J6Tkx1YWVrT1E9PTwvRFA+PERRPm12dDZodExJVER0eTZDVDNraG0wMWMreURmYTBaK0M2T1RGT1RMMVhiY1J0VjlnOFdIVGROTCtvU3FYQURkdjJoK3JSekFYU21GWmdkSzZ5b1Z5ZXl3PT08L0RRPjxJbnZlcnNlUT56Z0lDR3ZmR3JRYkhjMWVBOFJmYjVUaEFaQUlPU3lsVlROQndURkJwbjlPaGtQVWJseVpJa1hEZ0kranBMdTVURVFPcUdJakpkSGlvMmtOaVh6eUV5QT09PC9JbnZlcnNlUT48RD5PT3BFc2pEb1BDczVKWkVzL2gzQ1NCcVpRM2duN0U1eis5cEFjVlpLOTBEUGdIL2JtSHE2MkRhODFrQnorV1lsZkgzWkNnV2pqd1dzeStKdzhYSVFjVC9WeWlRa3B0YXVjV2djNWdBbEZDbEphN1ZFS0RTZ0Y3cEhtQ2QrS1BPR0hDUERTWDFabmtidjFLNWN5bGpjK0hHd3VLblJDendiOE9qQnluNkJxdkU9PC9EPjwvUlNBS2V5VmFsdWU+"
+  base_url: "https://fc-data.ssi.com.vn" # REST API host
+  stream_url: "wss://fcmarket.ssi.com.vn/..." # IDS WebSocket host — set full URL + path per spec
 
 telegram:
   bot_token: "" # from @BotFather — create a bot, copy the token here
-  chat_id: 0    # your Telegram user ID — send /start to the bot, then read it from getUpdates
+  chat_id: 0 # your Telegram user ID — send /start to the bot, then read it from getUpdates

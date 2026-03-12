@@ -5,4 +5,5 @@ dist/
 *.exe
 *.test
 .DS_Store
-
+fc-data/
+.claude/

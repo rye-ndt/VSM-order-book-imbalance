@@ -177,11 +177,11 @@ func (c *SSIOrderBookClient) bearerToken(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(raw, &ar); err != nil {
 		return "", fmt.Errorf("ssi ob auth: decode: %w", err)
 	}
-	if ar.ResponseCode != 0 {
+	if ar.Status != 200 || ar.Data.AccessToken == "" {
 		return "", fmt.Errorf("ssi ob auth: %s", ar.Message)
 	}
 
-	c.cachedToken = ar.Token
+	c.cachedToken = ar.Data.AccessToken
 	c.tokenExpiry = time.Now().Add(tokenTTL)
 	return c.cachedToken, nil
 }

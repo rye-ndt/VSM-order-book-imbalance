@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,10 @@ const (
 	tokenTTL = 23 * time.Hour
 )
 
+// ssiMinInterval is the minimum gap between any two SSI API calls.
+// SSI enforces a global per-user rate limit of 1 request/second.
+const ssiMinInterval = 1100 * time.Millisecond
+
 // SSIStockClient implements input.StockDataClient using the SSI
 // FastConnectData REST API v2.  Credentials are read from config.SSIConfig.
 type SSIStockClient struct {
@@ -40,6 +45,7 @@ type SSIStockClient struct {
 	mu          sync.Mutex
 	cachedToken string
 	tokenExpiry time.Time
+	lastCall    time.Time
 }
 
 // NewSSIStockClient constructs a ready-to-use SSIStockClient.
@@ -48,6 +54,16 @@ func NewSSIStockClient(cfg config.SSIConfig) input.StockDataClient {
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// throttle sleeps until at least ssiMinInterval has elapsed since the last
+// API call, then records the current time as the new last-call timestamp.
+// Must be called with c.mu held.
+func (c *SSIStockClient) throttle() {
+	if wait := ssiMinInterval - time.Since(c.lastCall); wait > 0 {
+		time.Sleep(wait)
+	}
+	c.lastCall = time.Now()
 }
 
 // -------------------------------------------------------------------------
@@ -59,10 +75,14 @@ type ssiAuthRequest struct {
 	ConsumerSecret string `json:"consumerSecret"`
 }
 
+type ssiAuthData struct {
+	AccessToken string `json:"accessToken"`
+}
+
 type ssiAuthResponse struct {
-	ResponseCode int    `json:"responseCode"`
-	Message      string `json:"message"`
-	Token        string `json:"token"`
+	Status  int          `json:"status"`
+	Message string       `json:"message"`
+	Data    ssiAuthData  `json:"data"`
 }
 
 // bearerToken returns a valid access token, fetching a new one when the cache
@@ -75,6 +95,7 @@ func (c *SSIStockClient) bearerToken(ctx context.Context) (string, error) {
 		return c.cachedToken, nil
 	}
 
+	c.throttle()
 	body, _ := json.Marshal(ssiAuthRequest{
 		ConsumerID:     c.cfg.ConsumerID,
 		ConsumerSecret: c.cfg.ConsumerSecret,
@@ -98,11 +119,11 @@ func (c *SSIStockClient) bearerToken(ctx context.Context) (string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
 		return "", fmt.Errorf("ssi auth: decode response: %w", err)
 	}
-	if ar.ResponseCode != 0 {
+	if ar.Status != 200 || ar.Data.AccessToken == "" {
 		return "", fmt.Errorf("ssi auth: %s", ar.Message)
 	}
 
-	c.cachedToken = ar.Token
+	c.cachedToken = ar.Data.AccessToken
 	c.tokenExpiry = time.Now().Add(tokenTTL)
 	return c.cachedToken, nil
 }
@@ -112,10 +133,15 @@ func (c *SSIStockClient) bearerToken(ctx context.Context) (string, error) {
 // -------------------------------------------------------------------------
 
 type ssiListResponse struct {
-	DataList    json.RawMessage `json:"dataList"`
+	DataList    json.RawMessage `json:"data"`
 	Message     string          `json:"message"`
-	Status      string          `json:"status"`
-	TotalRecord int             `json:"totalrecord"`
+	Status      json.RawMessage `json:"status"`
+	TotalRecord int             `json:"totalRecord"`
+}
+
+func (r ssiListResponse) isSuccess() bool {
+	s := strings.Trim(string(r.Status), `"`)
+	return s == "Success" || s == "SUCCESS"
 }
 
 func (c *SSIStockClient) getList(ctx context.Context, path string, params url.Values) (ssiListResponse, error) {
@@ -124,11 +150,16 @@ func (c *SSIStockClient) getList(ctx context.Context, path string, params url.Va
 		return ssiListResponse{}, err
 	}
 
+	c.mu.Lock()
+	c.throttle()
+	c.mu.Unlock()
+
 	u, err := url.Parse(c.cfg.BaseURL + path)
 	if err != nil {
 		return ssiListResponse{}, fmt.Errorf("ssi get %s: parse url: %w", path, err)
 	}
-	u.RawQuery = params.Encode()
+	// SSI requires date slashes to be literal "/" not percent-encoded "%2F".
+	u.RawQuery = strings.ReplaceAll(params.Encode(), "%2F", "/")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -152,7 +183,7 @@ func (c *SSIStockClient) getList(ctx context.Context, path string, params url.Va
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return ssiListResponse{}, fmt.Errorf("ssi get %s: decode: %w", path, err)
 	}
-	if result.Status != "SUCCESS" && result.Status != "Success" {
+	if !result.isSuccess() {
 		return ssiListResponse{}, fmt.Errorf("ssi get %s: %s", path, result.Message)
 	}
 	return result, nil
@@ -165,15 +196,15 @@ func (c *SSIStockClient) getList(ctx context.Context, path string, params url.Va
 // ssiOHLCRecord mirrors the JSON object inside the "dataList" array returned
 // by the DailyOhlc endpoint.  All numeric fields arrive as strings.
 type ssiOHLCRecord struct {
-	Symbol      string `json:"symbol"`
-	Market      string `json:"market"`
-	TradingDate string `json:"tradingdate"`
-	Open        string `json:"open"`
-	High        string `json:"high"`
-	Low         string `json:"low"`
-	Close       string `json:"close"`
-	Volume      string `json:"volume"`
-	Value       string `json:"value"`
+	Symbol      string `json:"Symbol"`
+	Market      string `json:"Market"`
+	TradingDate string `json:"TradingDate"`
+	Open        string `json:"Open"`
+	High        string `json:"High"`
+	Low         string `json:"Low"`
+	Close       string `json:"Close"`
+	Volume      string `json:"Volume"`
+	Value       string `json:"Value"`
 }
 
 func (c *SSIStockClient) fetchOHLCPage(
@@ -254,12 +285,12 @@ func (c *SSIStockClient) FetchVNIndexOHLCV(ctx context.Context, from, to time.Ti
 // ssiStockPriceRecord mirrors the subset of fields from DailyStockPrice that
 // are needed to compute foreign flow.  All numeric fields arrive as strings.
 type ssiStockPriceRecord struct {
-	Symbol              string `json:"symbol"`
-	TradingDate         string `json:"tradingdate"`
-	ForeignBuyVolTotal  string `json:"foreignbuyvoltotal"`
-	ForeignSellVolTotal string `json:"foreignsellvoltotal"`
-	ForeignBuyValTotal  string `json:"foreignbuyvaltotal"`
-	ForeignSellValTotal string `json:"foreignsellvaltotal"`
+	Symbol              string `json:"Symbol"`
+	TradingDate         string `json:"TradingDate"`
+	ForeignBuyVolTotal  string `json:"ForeignBuyVolTotal"`
+	ForeignSellVolTotal string `json:"ForeignSellVolTotal"`
+	ForeignBuyValTotal  string `json:"ForeignBuyValTotal"`
+	ForeignSellValTotal string `json:"ForeignSellValTotal"`
 }
 
 func (c *SSIStockClient) fetchStockPricePage(
