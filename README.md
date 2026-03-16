@@ -62,7 +62,7 @@ Loads the watchlist from the previous night's `stock_metrics`, subscribes to the
 7. Gap from prior-day close < 5%
 8. Pre-computed FinalScore ≥ regime threshold
 
-On fire: Telegram alert sent, and one row written to `signal_log` (see below).
+On fire: Telegram alert sent, one row written to `signal_log` (see below), and an AI interpretation follow-up is queued (see AI Interpretation below).
 
 **Session rules:** stocks with no indicated price by 09:07 ICT are dropped from the session. The signal window closes at 09:14 ICT — stability windows are reset so no new signals can fire in the final minute of the ATO period.
 
@@ -96,6 +96,22 @@ Outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns, etc.) are
 
 ---
 
+### AI interpretation
+
+After each signal fires, the `AI` port produces structured interpretations of the event study record. Three methods are available:
+
+| Method | Purpose |
+|---|---|
+| `Interpret` | Structured JSON analysis: recommendation (Buy/Skip), confidence (1–5), signal strength, entry/TP/SL prices, four-field reasoning, T+2 note, action clarity, avoid-if condition |
+| `XInterpret` | Vietnamese plain-text post for X/Twitter (≤280 characters) |
+| `TelegramInterpret` | Vietnamese conversational paragraph for the Telegram channel |
+
+`Interpret` uses OpenAI structured output (`strict: true` JSON schema) to prevent field drift. A `data_used` array is pre-built by Go code and echoed verbatim by the model — the model cannot invent values. The system prompt forbids buy/sell/hold advice beyond what the schema supports and prohibits macro commentary not present in the input.
+
+All three methods receive only `SignalRecord` fields — no external queries, no market context, no hallucination surface beyond the event study record itself.
+
+---
+
 ## Architecture
 
 ```
@@ -122,12 +138,13 @@ internal/
                       PostgresMarketStore  — all DB reads/writes, idempotent migration
                       TelegramNotifier     — signal alert delivery
                       XPoster              — Twitter API v2 (gotwi, OAuth 1.0a), implements SocialPoster port
+                      OpenAIClient         — implements AI port: Interpret (structured JSON), XInterpret (X post), TelegramInterpret (Telegram paragraph)
 
   server/
     server.go       — GET /healthz, GET /imbalance (placeholder)
 
   config/
-    config.go       — YAML config loader (DB, SSI credentials, Telegram, Twitter, HTTP listen addr, signal thresholds)
+    config.go       — YAML config loader (DB, SSI credentials, Telegram, Twitter, OpenAI, HTTP listen addr, signal thresholds)
 ```
 
 ---
@@ -170,7 +187,12 @@ The cleaner correctly filters zero-volume rows (today's market was still open at
 ### Social posting (X / Twitter) — implemented, not yet configured
 `SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent. Intended for daily market status posts.
 
+### AI signal interpretation — implemented, not yet wired
+`OpenAIClient` implements `Interpret`, `XInterpret`, and `TelegramInterpret`. Config accepts `openai.api_key` and `openai.model` (default `gpt-4o-mini`). Not yet wired into `ATOMonitorJob` or `main.go` — follow-up messages are not yet sent.
+
 ### Pending
+- Wire `OpenAIClient` into `main.go` (construct when `openai.api_key` is set, pass to `ATOMonitorJob`)
+- Wire AI follow-up into `ato_monitor.go`: goroutine after `store.LogSignal`, 5-second deadline, silent on failure
 - Configure Telegram (`bot_token` + `chat_id`) to receive signal alerts
 - Fill in `twitter:` credentials in `config.yaml` to enable X posting
 - Observe a live ATO session to confirm signal firing and `signal_log` writes
@@ -186,6 +208,7 @@ The cleaner correctly filters zero-volume rows (today's market was still open at
 - SSI FastConnectData credentials (`consumer_id` + `consumer_secret`)
 - Telegram bot token + chat ID (optional)
 - X (Twitter) OAuth 1.0a credentials — API key/secret + access token/secret (optional)
+- OpenAI API key (optional — enables AI signal interpretation)
 
 ## Getting started
 

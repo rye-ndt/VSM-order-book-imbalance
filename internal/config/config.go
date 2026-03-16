@@ -15,7 +15,26 @@ type Config struct {
 	SSI            SSIConfig      `mapstructure:"ssi"`
 	Telegram       TelegramConfig `mapstructure:"telegram"`
 	Twitter        TwitterConfig  `mapstructure:"twitter"`
+	OpenAI         OpenAIConfig   `mapstructure:"openai"`
 	Signal         SignalConfig   `mapstructure:"signal"`
+	Cron           CronConfig     `mapstructure:"cron"`
+}
+
+type OpenAIConfig struct {
+	APIKey string `mapstructure:"api_key"`
+	Model  string `mapstructure:"model"`
+}
+
+// CronConfig holds cron schedule expressions for scheduled jobs.
+// Expressions use standard 5-field cron syntax (minute hour dom month dow).
+// All times are interpreted in ICT (Asia/Ho_Chi_Minh, UTC+7).
+type CronConfig struct {
+	// MarketData is when to fetch previous-day market data and compute metrics.
+	// Default: "30 3 * * *" (03:30 ICT)
+	MarketData string `mapstructure:"market_data"`
+	// ATOMonitor is when to start monitoring the ATO order book.
+	// Default: "0 9 * * *" (09:00 ICT)
+	ATOMonitor string `mapstructure:"ato_monitor"`
 }
 
 // SignalConfig holds every numeric threshold that controls when an ATO signal
@@ -151,6 +170,12 @@ func Load(path string) (*Config, error) {
 	if cfg.HTTPListenAddr == "" {
 		cfg.HTTPListenAddr = ":8080"
 	}
+	if cfg.Cron.MarketData == "" {
+		cfg.Cron.MarketData = "30 3 * * *"
+	}
+	if cfg.Cron.ATOMonitor == "" {
+		cfg.Cron.ATOMonitor = "0 9 * * *"
+	}
 
 	s := &cfg.Signal
 	if s.MinImbalanceRatio == 0 {
@@ -194,6 +219,10 @@ func Load(path string) (*Config, error) {
 	}
 	if s.BearHalfScore == 0 {
 		s.BearHalfScore = 9
+	}
+
+	if cfg.OpenAI.Model == "" {
+		cfg.OpenAI.Model = "gpt-4o-mini"
 	}
 
 	return &cfg, nil

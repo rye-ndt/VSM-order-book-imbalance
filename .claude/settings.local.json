@@ -14,7 +14,9 @@
       "Bash(psql -c \"SELECT 1 FROM pg_database WHERE datname='orderbook'\" 2>&1)",
       "Bash(psql -d postgres -c \"SELECT 1 FROM pg_database WHERE datname='orderbook'\" 2>&1)",
       "Bash(psql -d postgres -c \"CREATE DATABASE orderbook;\" 2>&1)",
-      "Bash(psql orderbook:*)"
+      "Bash(psql orderbook:*)",
+      "Bash(psql:*)",
+      "Bash(grep:*)"
     ]
   }
 }

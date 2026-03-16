@@ -58,6 +58,7 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 | ATO monitor (signal gate) | Coded, not yet live-tested |
 | Telegram notifier (single recipient) | Complete |
 | signal_log (event study) | Schema live, 0 rows (not yet fired) |
+| AI signal interpretation (Interpret, XInterpret, TelegramInterpret) | Implemented, not yet wired to ATO job |
 | Multi-tenant Telegram bot | 0% |
 | Subscription/payment | 0% |
 | Corporate events filter | 0% |

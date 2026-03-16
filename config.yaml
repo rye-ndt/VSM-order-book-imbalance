@@ -20,6 +20,10 @@ telegram:
   bot_token: "8610310908:AAGpws8EzoSmd7i3-0KEv_skK09B3-vxUms"
   chat_id: 0 # your Telegram user ID — send /start to the bot, then read it from getUpdates
 
+openai:
+  api_key: "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"
+  model: "gpt-4o-mini"
+
 twitter:
   api_key: "" # OAuth 1.0a Consumer Key from developer.twitter.com
   api_key_secret: "" # OAuth 1.0a Consumer Secret
@@ -41,3 +45,7 @@ signal:
   choppy_half_score: 8
   bear_full_score: 12
   bear_half_score: 9
+
+cron:
+  market_data: "30 3 * * *" # 03:30 ICT
+  ato_monitor: "0 9 * * *" # 09:00 ICT

@@ -20,11 +20,19 @@ telegram:
   bot_token: "" # from @BotFather — create a bot, copy the token here
   chat_id: 0 # your Telegram user ID — send /start to the bot, then read it from getUpdates
 
+openai:
+  api_key: "" # OpenAI API key from platform.openai.com
+  model: "gpt-4o-mini" # model to use for signal interpretation
+
 twitter:
   api_key: "" # OAuth 1.0a Consumer Key from developer.twitter.com
   api_key_secret: "" # OAuth 1.0a Consumer Secret
   access_token: "" # per-account access token (generate in the portal)
   access_token_secret: "" # per-account access token secret
+
+cron:
+  market_data: "30 3 * * *"  # 03:30 ICT — fetch previous-day market data
+  ato_monitor: "0 9 * * *"   # 09:00 ICT — start ATO order book monitoring
 
 signal:
   min_imbalance_ratio:

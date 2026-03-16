@@ -8,3 +8,5 @@ dist/
 fc-data/
 .claude/
 config.yaml
+.idea/
+.claude/
