@@ -1,0 +1,37 @@
+http_listen_addr: ":8081"
+
+db:
+  host: "localhost"
+  port: 5432
+  user: "rye"
+  password: ""
+  name: "orderbook"
+  sslmode: "disable"
+
+ssi:
+  consumer_id: "" # SSI FastConnectData consumerID
+  consumer_secret: "" # SSI FastConnectData consumerSecret
+  public_key: ""
+  private_key: ""
+  base_url: "https://fc-data.ssi.com.vn" # REST API host
+  stream_url: "" # IDS WebSocket host — set full URL + path per spec
+
+telegram:
+  bot_token: "" # from @BotFather — create a bot, copy the token here
+  chat_id: 0 # your Telegram user ID — send /start to the bot, then read it from getUpdates
+
+signal:
+  min_imbalance_ratio:
+  max_spoof_fraction:
+  min_bid_levels:
+  ask_wall_fraction:
+  ask_wall_price_range:
+  stability_window:
+  max_gap_from_ref:
+  tp_ratio:
+  bull_full_score:
+  bull_half_score:
+  choppy_full_score:
+  choppy_half_score:
+  bear_full_score:
+  bear_half_score:
