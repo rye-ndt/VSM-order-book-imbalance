@@ -78,13 +78,13 @@ func main() {
 	c := cron.New(cron.WithLocation(ict))
 
 	// 03:30 ICT – fetch previous day's market data and compute stock metrics.
-	if _, err := c.AddJob("30 3 * * *", job.NewMarketDataJob(stockClient, store)); err != nil {
+	if _, err := c.AddJob("30 3 * * *", job.NewMarketDataJob(stockClient, store, cfg.Signal)); err != nil {
 		log.Fatalf("register market data cron job: %v", err)
 	}
 
 	// 09:00 ICT – monitor ATO order book for stocks flagged overnight.
 	// The job self-terminates at 09:15 ICT via an internal context deadline.
-	if _, err := c.AddJob("0 9 * * *", job.NewATOMonitorJob(store, obClient, notifier)); err != nil {
+	if _, err := c.AddJob("0 9 * * *", job.NewATOMonitorJob(store, obClient, notifier, cfg.Signal)); err != nil {
 		log.Fatalf("register ATO monitor cron job: %v", err)
 	}
 

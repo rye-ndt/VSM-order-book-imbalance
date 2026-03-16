@@ -4,16 +4,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/example/order-book-imbalance/internal/config"
 	"github.com/example/order-book-imbalance/internal/interface/input"
-)
-
-const (
-	minImbalanceRatio    = 3.0
-	maxSpoofFraction     = 0.4
-	minBidLevels         = 5
-	askWallFraction      = 0.30
-	askWallPriceRange    = 1.03 // only check ask walls within 3% above indicated price
-	stabilityWindowSize  = 3
 )
 
 type SnapshotAnalysis struct {
@@ -40,8 +32,8 @@ type StabilityWindow struct {
 // ProcessSnapshot runs the full ATO analysis pipeline for one order book
 // snapshot and updates the rolling stability window.
 // Returns the analysis and whether all stability conditions hold across the
-// last 3 snapshots.
-func ProcessSnapshot(snap input.OrderBookSnapshot, window *StabilityWindow) (SnapshotAnalysis, bool) {
+// configured number of consecutive snapshots.
+func ProcessSnapshot(snap input.OrderBookSnapshot, window *StabilityWindow, cfg config.SignalConfig) (SnapshotAnalysis, bool) {
 	analysis := SnapshotAnalysis{
 		Symbol:         snap.Symbol,
 		CapturedAt:     snap.CapturedAt,
@@ -58,9 +50,9 @@ func ProcessSnapshot(snap input.OrderBookSnapshot, window *StabilityWindow) (Sna
 		computeBidQuality(snap, analysis.TotalBidVolume)
 
 	analysis.HasAskWall, analysis.AskWallPrice, analysis.AskWallVolume =
-		detectAskWall(snap, analysis.TotalAskVolume)
+		detectAskWall(snap, analysis.TotalAskVolume, cfg)
 
-	isStable := updateStabilityWindow(window, analysis)
+	isStable := updateStabilityWindow(window, analysis, cfg)
 
 	return analysis, isStable
 }
@@ -91,9 +83,9 @@ func computeBidQuality(snap input.OrderBookSnapshot, totalBid float64) (levelCou
 	return
 }
 
-func detectAskWall(snap input.OrderBookSnapshot, totalAsk float64) (hasWall bool, wallPrice, wallVolume float64) {
-	threshold := totalAsk * askWallFraction
-	ceiling := snap.IndicatedPrice * askWallPriceRange
+func detectAskWall(snap input.OrderBookSnapshot, totalAsk float64, cfg config.SignalConfig) (hasWall bool, wallPrice, wallVolume float64) {
+	threshold := totalAsk * cfg.AskWallFraction
+	ceiling := snap.IndicatedPrice * cfg.AskWallPriceRange
 
 	sorted := make([]input.PriceLevel, len(snap.AskLevels))
 	copy(sorted, snap.AskLevels)
@@ -110,13 +102,13 @@ func detectAskWall(snap input.OrderBookSnapshot, totalAsk float64) (hasWall bool
 	return false, 0, 0
 }
 
-func updateStabilityWindow(window *StabilityWindow, analysis SnapshotAnalysis) bool {
+func updateStabilityWindow(window *StabilityWindow, analysis SnapshotAnalysis, cfg config.SignalConfig) bool {
 	window.Snapshots = append(window.Snapshots, analysis)
-	if len(window.Snapshots) > stabilityWindowSize {
+	if len(window.Snapshots) > cfg.StabilityWindow {
 		window.Snapshots = window.Snapshots[1:]
 	}
 
-	if len(window.Snapshots) < stabilityWindowSize {
+	if len(window.Snapshots) < cfg.StabilityWindow {
 		window.StableCount = 0
 		return false
 	}
@@ -132,9 +124,9 @@ func updateStabilityWindow(window *StabilityWindow, analysis SnapshotAnalysis) b
 	}
 
 	for _, s := range window.Snapshots {
-		if s.ImbalanceRatio < minImbalanceRatio ||
-			s.LargestBidFraction >= maxSpoofFraction ||
-			s.BidLevelCount < minBidLevels ||
+		if s.ImbalanceRatio < cfg.MinImbalanceRatio ||
+			s.LargestBidFraction >= cfg.MaxSpoofFraction ||
+			s.BidLevelCount < cfg.MinBidLevels ||
 			s.HasAskWall {
 			window.StableCount = 0
 			return false

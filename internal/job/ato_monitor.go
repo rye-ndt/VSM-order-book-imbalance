@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/example/order-book-imbalance/internal/calculator"
+	"github.com/example/order-book-imbalance/internal/config"
 	"github.com/example/order-book-imbalance/internal/interface/input"
 	"github.com/example/order-book-imbalance/internal/interface/output"
 )
@@ -24,24 +25,17 @@ const (
 
 	atoSignalStopHour   = 9
 	atoSignalStopMinute = 14
-
-	// maxGapFromRef is the maximum allowed gap between IndicatedPrice and
-	// RefPrice (prior-day close) for a signal to fire.
-	maxGapFromRef = 0.05
-
-	// atoTPRatio is the take-profit target expressed as a multiplier of the
-	// ATO indicated price (e.g. 1.03 = 3% above entry).
-	atoTPRatio = 1.03
 )
 
 type ATOMonitorJob struct {
 	store    output.MarketStore
 	obClient input.OrderBookClient
 	notifier output.Notifier
+	signal   config.SignalConfig
 }
 
-func NewATOMonitorJob(store output.MarketStore, obClient input.OrderBookClient, notifier output.Notifier) *ATOMonitorJob {
-	return &ATOMonitorJob{store: store, obClient: obClient, notifier: notifier}
+func NewATOMonitorJob(store output.MarketStore, obClient input.OrderBookClient, notifier output.Notifier, signal config.SignalConfig) *ATOMonitorJob {
+	return &ATOMonitorJob{store: store, obClient: obClient, notifier: notifier, signal: signal}
 }
 
 func (j *ATOMonitorJob) Run() {
@@ -72,7 +66,7 @@ func (j *ATOMonitorJob) Run() {
 	if hasRegime {
 		regimeLabel = regime.Regime
 	}
-	scoreThreshold := calculator.RegimeScoreThreshold(regimeLabel)
+	scoreThreshold := calculator.RegimeScoreThreshold(regimeLabel, j.signal)
 	log.Printf("[ato] market regime: %s  score threshold: %d", regimeLabel, scoreThreshold)
 
 	watchlist, err := j.store.LoadWatchlist(ctx)
@@ -133,7 +127,7 @@ func (j *ATOMonitorJob) Run() {
 				resetStabilityWindows(windows)
 				log.Printf("[ato] 09:14 ICT — signal window closed, stability windows reset")
 			}
-			pollOnce(ctx, j.store, j.obClient, j.notifier, active, windows, entries, fired, scoreThreshold, signalsStopped)
+			pollOnce(ctx, j.store, j.obClient, j.notifier, active, windows, entries, fired, scoreThreshold, signalsStopped, j.signal)
 		}
 	}
 }
@@ -166,6 +160,7 @@ func pollOnce(
 	fired map[string]bool,
 	scoreThreshold int,
 	signalsStopped bool,
+	signal config.SignalConfig,
 ) {
 	for sym := range active {
 		snap, err := obClient.FetchOrderBook(sym)
@@ -180,7 +175,7 @@ func pollOnce(
 			continue
 		}
 
-		analysis, isStable := calculator.ProcessSnapshot(snap, windows[sym])
+		analysis, isStable := calculator.ProcessSnapshot(snap, windows[sym], signal)
 		log.Printf("[ato] %s  ratio=%.2fx  bid_lvls=%d  spoof=%.0f%%  ask_wall=%v  stable=%d",
 			sym,
 			analysis.ImbalanceRatio,
@@ -195,14 +190,14 @@ func pollOnce(
 		}
 
 		entry := entries[sym]
-		reason, ok := checkSignalGate(snap, entry.FinalScore, scoreThreshold)
+		reason, ok := checkSignalGate(snap, entry.FinalScore, scoreThreshold, signal)
 		if !ok {
 			log.Printf("[ato] %s: signal gate blocked — %s", sym, reason)
 			continue
 		}
 
 		fired[sym] = true
-		tpPrice := snap.IndicatedPrice * atoTPRatio
+		tpPrice := snap.IndicatedPrice * signal.TPRatio
 		msg := fmt.Sprintf(
 			"ATO SIGNAL: %s\nRatio: %.2fx  Score: %d  Regime threshold: %d\nIndicated: %.0f  Ceiling: %.0f  Ref: %.0f\nTP: %.0f\nStable snapshots: %d",
 			sym, analysis.ImbalanceRatio, entry.FinalScore, scoreThreshold,
@@ -249,7 +244,7 @@ func pollOnce(
 
 // checkSignalGate validates all conditions that must hold at signal fire time.
 // Returns a reason string and false if any condition fails.
-func checkSignalGate(snap input.OrderBookSnapshot, score, threshold int) (reason string, ok bool) {
+func checkSignalGate(snap input.OrderBookSnapshot, score, threshold int, signal config.SignalConfig) (reason string, ok bool) {
 	if score < threshold {
 		return fmt.Sprintf("score %d below regime threshold %d", score, threshold), false
 	}
@@ -258,8 +253,8 @@ func checkSignalGate(snap input.OrderBookSnapshot, score, threshold int) (reason
 	}
 	if snap.RefPrice > 0 {
 		gap := (snap.IndicatedPrice - snap.RefPrice) / snap.RefPrice
-		if gap >= maxGapFromRef {
-			return fmt.Sprintf("gap from ref %.1f%% >= 5%%", gap*100), false
+		if gap >= signal.MaxGapFromRef {
+			return fmt.Sprintf("gap from ref %.1f%% >= %.0f%%", gap*100, signal.MaxGapFromRef*100), false
 		}
 	}
 	return "", true

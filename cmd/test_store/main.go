@@ -38,7 +38,7 @@ func main() {
 	log.Println("migration OK")
 
 	log.Println("running MarketDataJob...")
-	j := job.NewMarketDataJob(stockClient, store)
+	j := job.NewMarketDataJob(stockClient, store, cfg.Signal)
 	j.Run()
 	log.Println("job complete")
 

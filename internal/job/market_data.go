@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/example/order-book-imbalance/internal/calculator"
+	"github.com/example/order-book-imbalance/internal/config"
 	"github.com/example/order-book-imbalance/internal/interface/input"
 	"github.com/example/order-book-imbalance/internal/interface/output"
 )
@@ -20,10 +21,11 @@ const (
 type MarketDataJob struct {
 	client input.StockDataClient
 	store  output.MarketStore
+	signal config.SignalConfig
 }
 
-func NewMarketDataJob(client input.StockDataClient, store output.MarketStore) *MarketDataJob {
-	return &MarketDataJob{client: client, store: store}
+func NewMarketDataJob(client input.StockDataClient, store output.MarketStore, signal config.SignalConfig) *MarketDataJob {
+	return &MarketDataJob{client: client, store: store, signal: signal}
 }
 
 func (j *MarketDataJob) Run() {
@@ -136,7 +138,7 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 			m.ShouldMonitorToday = calculator.ShouldMonitorToday(m)
 			m.Regime = regimeLabel
 			m.ForeignNetBuy = foreignNetBuy[symbol]
-			m.FinalScore, m.PositionSizeFlag = calculator.ComputeFinalScore(m)
+			m.FinalScore, m.PositionSizeFlag = calculator.ComputeFinalScore(m, j.signal)
 			metrics = append(metrics, m)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/example/order-book-imbalance/internal/config"
 	"github.com/example/order-book-imbalance/internal/interface/input"
 	"github.com/example/order-book-imbalance/internal/interface/output"
 )
@@ -217,8 +218,8 @@ func isDoji(c input.OHLCV) bool {
 
 // ComputeFinalScore scores a stock and returns a position-size flag.
 // Returns (0, "Skip") immediately when ShouldMonitorToday is false.
-// The regime embedded in m determines the Full/Half/Skip thresholds.
-func ComputeFinalScore(m output.StockMetrics) (int, string) {
+// The regime embedded in m and the thresholds in cfg determine Full/Half/Skip.
+func ComputeFinalScore(m output.StockMetrics, cfg config.SignalConfig) (int, string) {
 	if !m.ShouldMonitorToday {
 		return 0, "Skip"
 	}
@@ -327,12 +328,12 @@ func ComputeFinalScore(m output.StockMetrics) (int, string) {
 	}
 
 	// Regime-adjusted thresholds
-	fullThreshold, halfThreshold := 11, 8 // default: Choppy
+	fullThreshold, halfThreshold := cfg.ChoppyFullScore, cfg.ChoppyHalfScore
 	switch m.Regime {
 	case output.RegimeBull:
-		fullThreshold, halfThreshold = 10, 7
+		fullThreshold, halfThreshold = cfg.BullFullScore, cfg.BullHalfScore
 	case output.RegimeBear:
-		fullThreshold, halfThreshold = 12, 9
+		fullThreshold, halfThreshold = cfg.BearFullScore, cfg.BearHalfScore
 	}
 
 	switch {
@@ -348,14 +349,14 @@ func ComputeFinalScore(m output.StockMetrics) (int, string) {
 // RegimeScoreThreshold returns the minimum FinalScore for a signal to fire
 // in the morning session. These are the half-position thresholds from
 // ComputeFinalScore, re-expressed here for the ATO signal gate.
-func RegimeScoreThreshold(regime output.RegimeLabel) int {
+func RegimeScoreThreshold(regime output.RegimeLabel, cfg config.SignalConfig) int {
 	switch regime {
 	case output.RegimeBull:
-		return 7
+		return cfg.BullHalfScore
 	case output.RegimeBear:
-		return 9
+		return cfg.BearHalfScore
 	default: // Choppy
-		return 8
+		return cfg.ChoppyHalfScore
 	}
 }
 

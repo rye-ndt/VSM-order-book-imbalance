@@ -19,3 +19,19 @@ ssi:
 telegram:
   bot_token: "8610310908:AAGpws8EzoSmd7i3-0KEv_skK09B3-vxUms"
   chat_id: 0 # your Telegram user ID — send /start to the bot, then read it from getUpdates
+
+signal:
+  min_imbalance_ratio: 3.0
+  max_spoof_fraction: 0.40
+  min_bid_levels: 5
+  ask_wall_fraction: 0.30
+  ask_wall_price_range: 1.03
+  stability_window: 3
+  max_gap_from_ref: 0.05
+  tp_ratio: 1.03
+  bull_full_score: 10
+  bull_half_score: 7
+  choppy_full_score: 11
+  choppy_half_score: 8
+  bear_full_score: 12
+  bear_half_score: 9
