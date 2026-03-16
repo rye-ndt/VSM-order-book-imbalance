@@ -124,6 +124,11 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS resistance_distance NUMERIC(10, 6) NOT NULL DEFAULT 0;
 		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS above_20ma          BOOLEAN        NOT NULL DEFAULT FALSE;
 		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS position_size_flag  TEXT           NOT NULL DEFAULT 'Skip';
+
+		CREATE TABLE IF NOT EXISTS bot_subscribers (
+			chat_id       BIGINT      PRIMARY KEY,
+			subscribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -527,6 +532,68 @@ func (s *PostgresMarketStore) LoadMonitoredStocks(ctx context.Context) ([]string
 		symbols = append(symbols, sym)
 	}
 	return symbols, rows.Err()
+}
+
+type TodaySignal struct {
+	Symbol          string
+	EntryPrice      float64
+	TPPrice         float64
+	PositionSizeFlag string
+	FiredAt         time.Time
+}
+
+func (s *PostgresMarketStore) LoadTodaySignals(ctx context.Context) ([]TodaySignal, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol, entry_price, tp_price, position_size_flag, fired_at
+		FROM signal_log
+		WHERE fired_at >= (CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh') AT TIME ZONE 'UTC'
+		ORDER BY fired_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load today signals: %w", err)
+	}
+	defer rows.Close()
+
+	var result []TodaySignal
+	for rows.Next() {
+		var r TodaySignal
+		if err := rows.Scan(&r.Symbol, &r.EntryPrice, &r.TPPrice, &r.PositionSizeFlag, &r.FiredAt); err != nil {
+			return nil, fmt.Errorf("scan today signal: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresMarketStore) AddSubscriber(ctx context.Context, chatID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO bot_subscribers (chat_id) VALUES ($1)
+		ON CONFLICT (chat_id) DO NOTHING
+	`, chatID)
+	return err
+}
+
+func (s *PostgresMarketStore) RemoveSubscriber(ctx context.Context, chatID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM bot_subscribers WHERE chat_id = $1`, chatID)
+	return err
+}
+
+func (s *PostgresMarketStore) LoadSubscribers(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT chat_id FROM bot_subscribers`)
+	if err != nil {
+		return nil, fmt.Errorf("load subscribers: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan subscriber: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (s *PostgresMarketStore) LoadRecentIndexOHLCV(ctx context.Context, symbol string, days int) ([]input.OHLCV, error) {

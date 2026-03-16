@@ -12,6 +12,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/example/order-book-imbalance/internal/config"
+	"github.com/example/order-book-imbalance/internal/interface/output"
 	"github.com/example/order-book-imbalance/internal/job"
 	"github.com/example/order-book-imbalance/internal/modules"
 	"github.com/example/order-book-imbalance/internal/server"
@@ -50,10 +51,15 @@ func main() {
 	store := modules.NewPostgresMarketStore(db)
 	obClient := modules.NewSSIOrderBookClient(cfg.SSI)
 
-	notifier, err := modules.NewTelegramNotifier(cfg.Telegram)
+	tgBot, err := modules.NewTelegramBot(cfg.Telegram, store)
 	if err != nil {
-		log.Printf("telegram notifier disabled: %v", err)
-		notifier = nil
+		log.Printf("telegram bot disabled: %v", err)
+	}
+
+	var notifier output.Notifier
+	if tgBot != nil {
+		notifier = tgBot
+		go tgBot.Run(context.Background())
 	}
 
 	// Run schema migration once at startup before the first job execution.

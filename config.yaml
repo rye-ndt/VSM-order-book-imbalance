@@ -1,10 +1,10 @@
-http_listen_addr: ":8080"
+http_listen_addr: ":8081"
 
 db:
   host: "localhost"
   port: 5432
-  user: "postgres"
-  password: "postgres"
+  user: "rye"
+  password: ""
   name: "orderbook"
   sslmode: "disable"
 
@@ -17,5 +17,5 @@ ssi:
   stream_url: "wss://fcmarket.ssi.com.vn/..." # IDS WebSocket host — set full URL + path per spec
 
 telegram:
-  bot_token: "" # from @BotFather — create a bot, copy the token here
+  bot_token: "8610310908:AAGpws8EzoSmd7i3-0KEv_skK09B3-vxUms"
   chat_id: 0 # your Telegram user ID — send /start to the bot, then read it from getUpdates

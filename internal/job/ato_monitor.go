@@ -52,8 +52,8 @@ func (j *ATOMonitorJob) Run() {
 	}
 
 	now := time.Now().In(loc)
-	stopAt       := time.Date(now.Year(), now.Month(), now.Day(), atoEndHour, atoEndMinute, 0, 0, loc)
-	dropAt       := time.Date(now.Year(), now.Month(), now.Day(), atoDropHour, atoDropMinute, 0, 0, loc)
+	stopAt := time.Date(now.Year(), now.Month(), now.Day(), atoEndHour, atoEndMinute, 0, 0, loc)
+	dropAt := time.Date(now.Year(), now.Month(), now.Day(), atoDropHour, atoDropMinute, 0, 0, loc)
 	signalStopAt := time.Date(now.Year(), now.Month(), now.Day(), atoSignalStopHour, atoSignalStopMinute, 0, 0, loc)
 
 	if !time.Now().Before(stopAt) {
@@ -109,7 +109,7 @@ func (j *ATOMonitorJob) Run() {
 
 	fired := make(map[string]bool, len(active))
 
-	dropped        := false
+	dropped := false
 	signalsStopped := false
 	ticker := time.NewTicker(atoPollInterval)
 	defer ticker.Stop()

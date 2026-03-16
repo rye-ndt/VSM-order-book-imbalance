@@ -146,6 +146,33 @@ Schema migrations run automatically at startup via `Migrate()` using `CREATE TAB
 
 ---
 
+## Current status
+
+### Nightly pipeline — complete and verified
+The full nightly pipeline has been run end-to-end against the live SSI FastConnectData API:
+
+| Table | Rows stored | Latest date |
+|---|---|---|
+| `stock_ohlcv` | 18,673 | 2026-03-16 |
+| `stock_foreign_flow` | 63,602 | 2026-03-16 |
+| `index_ohlcv` | 15 | 2026-03-16 |
+| `stock_metrics` | 1,437 | 2026-03-16 |
+| `market_regime` | 1 | 2026-03-16 (Bear) |
+
+The cleaner correctly filters zero-volume rows (today's market was still open at fetch time) and drops symbols with fewer than 5 trading days in the window (newly listed / suspended).
+
+### Morning ATO monitor — implemented, not yet live-tested
+`ATOMonitorJob` is fully coded: watchlist loading, SSI IDS WebSocket subscription, 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. It has not yet run during a live ATO session (09:00–09:15 ICT), so end-to-end signal firing has not been observed.
+
+`signal_log` is empty — no signals have fired yet.
+
+### Pending
+- Configure Telegram (`bot_token` + `chat_id`) to receive signal alerts
+- Observe a live ATO session to confirm signal firing and `signal_log` writes
+- Back-fill outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns) once T+2 prices are available
+
+---
+
 ## Requirements
 
 - Go 1.24+
