@@ -31,7 +31,7 @@ twitter:
   access_token_secret: "" # per-account access token secret
 
 cron:
-  market_data: "30 3 * * *"  # 03:30 ICT — fetch previous-day market data
+  market_data: "45 8 * * *"  # 08:45 ICT — fetch previous-day market data
   ato_monitor: "0 9 * * *"   # 09:00 ICT — start ATO order book monitoring
 
 signal:
@@ -54,9 +54,9 @@ ato:
   timezone: "Asia/Ho_Chi_Minh"
   poll_interval: 2s
   end_hour: 9
-  end_minute: 15
+  end_minute: 14
   drop_hour: 9
   drop_minute: 7
   signal_stop_hour: 9
-  signal_stop_minute: 14
+  signal_stop_minute: 13
   ai_timeout: 30s
