@@ -13,45 +13,61 @@ import (
 	"github.com/example/order-book-imbalance/internal/interface/output"
 )
 
-const (
-	atoPollInterval = 2 * time.Second
-	atoLocation     = "Asia/Ho_Chi_Minh"
-
-	atoEndHour   = 9
-	atoEndMinute = 15
-
-	atoDropHour   = 9
-	atoDropMinute = 7
-
-	atoSignalStopHour   = 9
-	atoSignalStopMinute = 14
-)
-
 type ATOMonitorJob struct {
-	store    output.MarketStore
-	obClient input.OrderBookClient
-	notifier output.Notifier
-	signal   config.SignalConfig
+	store        output.MarketStore
+	obClient     input.OrderBookClient
+	notifier     output.Notifier
+	socialPoster output.SocialPoster
+	ai           output.AI
+	signal       config.SignalConfig
+	ato          config.ATOConfig
 }
 
-func NewATOMonitorJob(store output.MarketStore, obClient input.OrderBookClient, notifier output.Notifier, signal config.SignalConfig) *ATOMonitorJob {
-	return &ATOMonitorJob{store: store, obClient: obClient, notifier: notifier, signal: signal}
+type atoCandidate struct {
+	sym         string
+	snap        input.OrderBookSnapshot
+	analysis    calculator.SnapshotAnalysis
+	entry       output.WatchlistEntry
+	stableCount int
+}
+
+func NewATOMonitorJob(
+	store output.MarketStore,
+	obClient input.OrderBookClient,
+	notifier output.Notifier,
+	socialPoster output.SocialPoster,
+	ai output.AI,
+	signal config.SignalConfig,
+	ato config.ATOConfig,
+) *ATOMonitorJob {
+	return &ATOMonitorJob{
+		store:        store,
+		obClient:     obClient,
+		notifier:     notifier,
+		socialPoster: socialPoster,
+		ai:           ai,
+		signal:       signal,
+		ato:          ato,
+	}
 }
 
 func (j *ATOMonitorJob) Run() {
-	loc, err := time.LoadLocation(atoLocation)
+	loc, err := time.LoadLocation(j.ato.Timezone)
 	if err != nil {
 		log.Printf("[ato] load timezone: %v", err)
 		return
 	}
 
 	now := time.Now().In(loc)
-	stopAt := time.Date(now.Year(), now.Month(), now.Day(), atoEndHour, atoEndMinute, 0, 0, loc)
-	dropAt := time.Date(now.Year(), now.Month(), now.Day(), atoDropHour, atoDropMinute, 0, 0, loc)
-	signalStopAt := time.Date(now.Year(), now.Month(), now.Day(), atoSignalStopHour, atoSignalStopMinute, 0, 0, loc)
+	localTime := func(h, m int) time.Time {
+		return time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, loc)
+	}
+	stopAt := localTime(j.ato.EndHour, j.ato.EndMinute)
+	dropAt := localTime(j.ato.DropHour, j.ato.DropMinute)
+	signalStopAt := localTime(j.ato.SignalStopHour, j.ato.SignalStopMinute)
 
 	if !time.Now().Before(stopAt) {
-		log.Printf("[ato] already past 09:15 ICT, skipping")
+		log.Printf("[ato] already past %02d:%02d ICT, skipping", j.ato.EndHour, j.ato.EndMinute)
 		return
 	}
 
@@ -85,7 +101,7 @@ func (j *ATOMonitorJob) Run() {
 		entries[e.Symbol] = e
 		active[e.Symbol] = true
 	}
-	log.Printf("[ato] monitoring %d stocks until 09:15 ICT", len(active))
+	log.Printf("[ato] monitoring %d stocks until %02d:%02d ICT", len(active), j.ato.EndHour, j.ato.EndMinute)
 
 	symbols := make([]string, 0, len(watchlist))
 	for _, e := range watchlist {
@@ -102,10 +118,9 @@ func (j *ATOMonitorJob) Run() {
 	}
 
 	fired := make(map[string]bool, len(active))
-
 	dropped := false
 	signalsStopped := false
-	ticker := time.NewTicker(atoPollInterval)
+	ticker := time.NewTicker(j.ato.PollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -116,7 +131,7 @@ func (j *ATOMonitorJob) Run() {
 		case t := <-ticker.C:
 			if !dropped && t.After(dropAt) {
 				dropped = true
-				dropNoPrice(active, windows)
+				dropNoPrice(active, windows, j.ato.DropHour, j.ato.DropMinute)
 			}
 			if len(active) == 0 {
 				log.Printf("[ato] all symbols dropped, exiting early")
@@ -125,45 +140,28 @@ func (j *ATOMonitorJob) Run() {
 			if !signalsStopped && t.After(signalStopAt) {
 				signalsStopped = true
 				resetStabilityWindows(windows)
-				log.Printf("[ato] 09:14 ICT — signal window closed, stability windows reset")
+				log.Printf("[ato] %02d:%02d ICT — signal window closed, stability windows reset",
+					j.ato.SignalStopHour, j.ato.SignalStopMinute)
 			}
-			pollOnce(ctx, j.store, j.obClient, j.notifier, active, windows, entries, fired, scoreThreshold, signalsStopped, j.signal)
+			for _, c := range j.poll(active, windows, entries, fired, scoreThreshold, signalsStopped) {
+				fired[c.sym] = true
+				j.fireSignal(ctx, c, scoreThreshold)
+			}
 		}
 	}
 }
 
-func resetStabilityWindows(windows map[string]*calculator.StabilityWindow) {
-	for sym := range windows {
-		windows[sym].Snapshots = nil
-		windows[sym].StableCount = 0
-	}
-}
-
-func dropNoPrice(active map[string]bool, windows map[string]*calculator.StabilityWindow) {
-	for sym := range active {
-		snaps := windows[sym].Snapshots
-		if len(snaps) == 0 || snaps[len(snaps)-1].IndicatedPrice == 0 {
-			log.Printf("[ato] %s: no indicated price by 09:07 ICT, dropping", sym)
-			delete(active, sym)
-		}
-	}
-}
-
-func pollOnce(
-	ctx context.Context,
-	store output.MarketStore,
-	obClient input.OrderBookClient,
-	notifier output.Notifier,
+func (j *ATOMonitorJob) poll(
 	active map[string]bool,
 	windows map[string]*calculator.StabilityWindow,
 	entries map[string]output.WatchlistEntry,
 	fired map[string]bool,
 	scoreThreshold int,
 	signalsStopped bool,
-	signal config.SignalConfig,
-) {
+) []atoCandidate {
+	var candidates []atoCandidate
 	for sym := range active {
-		snap, err := obClient.FetchOrderBook(sym)
+		snap, err := j.obClient.FetchOrderBook(sym)
 		if errors.Is(err, input.ErrNoSnapshot) {
 			continue
 		}
@@ -175,7 +173,7 @@ func pollOnce(
 			continue
 		}
 
-		analysis, isStable := calculator.ProcessSnapshot(snap, windows[sym], signal)
+		analysis, isStable := calculator.ProcessSnapshot(snap, windows[sym], j.signal)
 		log.Printf("[ato] %s  ratio=%.2fx  bid_lvls=%d  spoof=%.0f%%  ask_wall=%v  stable=%d",
 			sym,
 			analysis.ImbalanceRatio,
@@ -189,62 +187,126 @@ func pollOnce(
 			continue
 		}
 
-		entry := entries[sym]
-		reason, ok := checkSignalGate(snap, entry.FinalScore, scoreThreshold, signal)
+		reason, ok := checkSignalGate(snap, entries[sym].FinalScore, scoreThreshold, j.signal)
 		if !ok {
 			log.Printf("[ato] %s: signal gate blocked — %s", sym, reason)
 			continue
 		}
 
-		fired[sym] = true
-		tpPrice := snap.IndicatedPrice * signal.TPRatio
-		msg := fmt.Sprintf(
-			"ATO SIGNAL: %s\nRatio: %.2fx  Score: %d  Regime threshold: %d\nIndicated: %.0f  Ceiling: %.0f  Ref: %.0f\nTP: %.0f\nStable snapshots: %d",
-			sym, analysis.ImbalanceRatio, entry.FinalScore, scoreThreshold,
-			snap.IndicatedPrice, snap.CeilingPrice, snap.RefPrice,
-			tpPrice,
-			windows[sym].StableCount,
-		)
-		log.Printf("[ato] SIGNAL %s", msg)
-		if notifier != nil {
-			if err := notifier.Notify(ctx, msg); err != nil {
-				log.Printf("[ato] notify: %v", err)
+		candidates = append(candidates, atoCandidate{
+			sym:         sym,
+			snap:        snap,
+			analysis:    analysis,
+			entry:       entries[sym],
+			stableCount: windows[sym].StableCount,
+		})
+	}
+
+	return candidates
+}
+
+func (j *ATOMonitorJob) fireSignal(ctx context.Context, c atoCandidate, scoreThreshold int) {
+	tpPrice := c.snap.IndicatedPrice * j.signal.TPRatio
+	msg := fmt.Sprintf(
+		"ATO SIGNAL: %s\nRatio: %.2fx  Score: %d  Regime threshold: %d\n"+
+			"Indicated: %.0f  Ceiling: %.0f  Ref: %.0f\nTP: %.0f\nStable snapshots: %d",
+		c.sym, c.analysis.ImbalanceRatio, c.entry.FinalScore, scoreThreshold,
+		c.snap.IndicatedPrice, c.snap.CeilingPrice, c.snap.RefPrice,
+		tpPrice, c.stableCount,
+	)
+	log.Printf("[ato] SIGNAL %s", msg)
+	if j.notifier != nil {
+		if err := j.notifier.Notify(ctx, msg); err != nil {
+			log.Printf("[ato] notify: %v", err)
+		}
+	}
+
+	var openGap float64
+	if c.snap.RefPrice > 0 {
+		openGap = (c.snap.IndicatedPrice - c.snap.RefPrice) / c.snap.RefPrice
+	}
+	rec := output.SignalRecord{
+		Symbol:             c.sym,
+		FinalScore:         c.entry.FinalScore,
+		IndicatedPrice:     c.snap.IndicatedPrice,
+		TPPrice:            tpPrice,
+		FiredAt:            time.Now(),
+		OpenGap:            openGap,
+		ImbalanceRatio:     c.analysis.ImbalanceRatio,
+		SnapshotCount:      c.stableCount,
+		SnapshotFiredAt:    c.analysis.CapturedAt,
+		Regime:             c.entry.Regime,
+		CandlePattern:      c.entry.CandlePattern,
+		VPR:                c.entry.VPR,
+		VolumeTrend:        c.entry.VolumeTrend,
+		VolumeRatio:        c.entry.VolumeRatio,
+		MomentumScore:      c.entry.MomentumScore,
+		ResistanceDistance: c.entry.ResistanceDistance,
+		Above20MA:          c.entry.Above20MA,
+		PositionSizeFlag:   c.entry.PositionSizeFlag,
+	}
+	if err := j.store.LogSignal(ctx, rec); err != nil {
+		log.Printf("[ato] %s: log signal: %v", c.sym, err)
+	}
+
+	if j.ai != nil {
+		go j.postAISignal(rec, scoreThreshold)
+	}
+}
+
+func (j *ATOMonitorJob) postAISignal(rec output.SignalRecord, threshold int) {
+	ctx, cancel := context.WithTimeout(context.Background(), j.ato.AITimeout)
+	defer cancel()
+
+	interp, err := j.ai.Interpret(ctx, rec, threshold)
+	if err != nil {
+		log.Printf("[ato] %s: ai interpret: %v", rec.Symbol, err)
+		return
+	}
+
+	if j.socialPoster != nil {
+		xText, err := j.ai.XInterpret(ctx, interp)
+		if err != nil {
+			log.Printf("[ato] %s: ai x interpret: %v", rec.Symbol, err)
+		} else if xText != "" {
+			if err := j.socialPoster.Post(ctx, xText); err != nil {
+				log.Printf("[ato] %s: x post: %v", rec.Symbol, err)
 			}
 		}
+	}
 
-		var openGap float64
-		if snap.RefPrice > 0 {
-			openGap = (snap.IndicatedPrice - snap.RefPrice) / snap.RefPrice
-		}
-		rec := output.SignalRecord{
-			Symbol:             sym,
-			FinalScore:         entry.FinalScore,
-			IndicatedPrice:     snap.IndicatedPrice,
-			TPPrice:            tpPrice,
-			FiredAt:            time.Now(),
-			OpenGap:            openGap,
-			ImbalanceRatio:     analysis.ImbalanceRatio,
-			SnapshotCount:      windows[sym].StableCount,
-			SnapshotFiredAt:    analysis.CapturedAt,
-			Regime:             entry.Regime,
-			CandlePattern:      entry.CandlePattern,
-			VPR:                entry.VPR,
-			VolumeTrend:        entry.VolumeTrend,
-			VolumeRatio:        entry.VolumeRatio,
-			MomentumScore:      entry.MomentumScore,
-			ResistanceDistance: entry.ResistanceDistance,
-			Above20MA:          entry.Above20MA,
-			PositionSizeFlag:   entry.PositionSizeFlag,
-		}
-		if err := store.LogSignal(ctx, rec); err != nil {
-			log.Printf("[ato] %s: log signal: %v", sym, err)
+	if j.notifier != nil {
+		tgText, err := j.ai.TelegramInterpret(ctx, interp)
+		if err != nil {
+			log.Printf("[ato] %s: ai telegram interpret: %v", rec.Symbol, err)
+		} else if tgText != "" {
+			if err := j.notifier.Notify(ctx, tgText); err != nil {
+				log.Printf("[ato] %s: ai telegram notify: %v", rec.Symbol, err)
+			}
 		}
 	}
 }
 
-// checkSignalGate validates all conditions that must hold at signal fire time.
-// Returns a reason string and false if any condition fails.
-func checkSignalGate(snap input.OrderBookSnapshot, score, threshold int, signal config.SignalConfig) (reason string, ok bool) {
+func resetStabilityWindows(windows map[string]*calculator.StabilityWindow) {
+	for sym := range windows {
+		windows[sym].Snapshots = nil
+		windows[sym].StableCount = 0
+	}
+}
+
+func dropNoPrice(active map[string]bool, windows map[string]*calculator.StabilityWindow, dropHour, dropMinute int) {
+	for sym := range active {
+		snaps := windows[sym].Snapshots
+		if len(snaps) == 0 || snaps[len(snaps)-1].IndicatedPrice == 0 {
+			log.Printf("[ato] %s: no indicated price by %02d:%02d ICT, dropping", sym, dropHour, dropMinute)
+			delete(active, sym)
+		}
+	}
+}
+
+func checkSignalGate(
+	snap input.OrderBookSnapshot, score, threshold int, signal config.SignalConfig,
+) (reason string, ok bool) {
 	if score < threshold {
 		return fmt.Sprintf("score %d below regime threshold %d", score, threshold), false
 	}

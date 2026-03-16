@@ -16,6 +16,10 @@ const (
 	fetchTimeout    = 2 * time.Hour
 	defaultLookback = 20 * 24 * time.Hour
 	vnIndexSymbol   = "VNINDEX"
+	dateLayout      = "2006-01-02"
+
+	stockHistoryDays = 30
+	indexHistoryDays = 150
 )
 
 type MarketDataJob struct {
@@ -24,7 +28,11 @@ type MarketDataJob struct {
 	signal config.SignalConfig
 }
 
-func NewMarketDataJob(client input.StockDataClient, store output.MarketStore, signal config.SignalConfig) *MarketDataJob {
+func NewMarketDataJob(
+	client input.StockDataClient,
+	store output.MarketStore,
+	signal config.SignalConfig,
+) *MarketDataJob {
 	return &MarketDataJob{client: client, store: store, signal: signal}
 }
 
@@ -38,84 +46,84 @@ func (j *MarketDataJob) Run() {
 
 	var wg sync.WaitGroup
 	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		from, skip := fetchFrom(ctx, yesterday, firstRunFrom, func() (time.Time, bool, error) {
-			return j.store.LatestStockOHLCVDate(ctx)
-		})
-		if skip {
-			log.Printf("[job] stock_ohlcv: up to date, skipping")
-			return
-		}
-		raw, err := j.client.FetchAllStocksOHLCV(ctx, from, today)
-		if err != nil {
-			log.Printf("[job] stock_ohlcv: fetch: %v", err)
-			return
-		}
-		clean := CleanOHLCV(raw)
-		log.Printf("[job] stock_ohlcv: %d raw → %d clean (%s–%s)", len(raw), len(clean), from.Format("2006-01-02"), today.Format("2006-01-02"))
-		if err := j.store.UpsertStockOHLCV(ctx, clean); err != nil {
-			log.Printf("[job] stock_ohlcv: upsert: %v", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		from, skip := fetchFrom(ctx, yesterday, firstRunFrom, func() (time.Time, bool, error) {
-			return j.store.LatestForeignFlowDate(ctx)
-		})
-		if skip {
-			log.Printf("[job] foreign_flow: up to date, skipping")
-			return
-		}
-		raw, err := j.client.FetchForeignFlow(ctx, from, today)
-		if err != nil {
-			log.Printf("[job] foreign_flow: fetch: %v", err)
-			return
-		}
-		clean := CleanForeignFlow(raw)
-		log.Printf("[job] foreign_flow: %d raw → %d clean (%s–%s)", len(raw), len(clean), from.Format("2006-01-02"), today.Format("2006-01-02"))
-		if err := j.store.UpsertForeignFlow(ctx, clean); err != nil {
-			log.Printf("[job] foreign_flow: upsert: %v", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		from, skip := fetchFrom(ctx, yesterday, firstRunFrom, func() (time.Time, bool, error) {
-			return j.store.LatestIndexOHLCVDate(ctx, vnIndexSymbol)
-		})
-		if skip {
-			log.Printf("[job] index_ohlcv: up to date, skipping")
-			return
-		}
-		raw, err := j.client.FetchVNIndexOHLCV(ctx, from, today)
-		if err != nil {
-			log.Printf("[job] index_ohlcv: fetch: %v", err)
-			return
-		}
-		clean := CleanOHLCV(raw)
-		log.Printf("[job] index_ohlcv: %d raw → %d clean (%s–%s)", len(raw), len(clean), from.Format("2006-01-02"), today.Format("2006-01-02"))
-		if err := j.store.UpsertIndexOHLCV(ctx, clean); err != nil {
-			log.Printf("[job] index_ohlcv: upsert: %v", err)
-		}
-	}()
-
+	go func() { defer wg.Done(); j.syncStockOHLCV(ctx, yesterday, firstRunFrom, today) }()
+	go func() { defer wg.Done(); j.syncForeignFlow(ctx, yesterday, firstRunFrom, today) }()
+	go func() { defer wg.Done(); j.syncIndexOHLCV(ctx, yesterday, firstRunFrom, today) }()
 	wg.Wait()
 
 	j.runMetricsPipeline(ctx)
 }
 
+func (j *MarketDataJob) syncStockOHLCV(ctx context.Context, yesterday, firstRunFrom, today time.Time) {
+	from, skip := fetchFrom(yesterday, firstRunFrom, func() (time.Time, bool, error) {
+		return j.store.LatestStockOHLCVDate(ctx)
+	})
+	if skip {
+		log.Printf("[job] stock_ohlcv: up to date, skipping")
+		return
+	}
+	raw, err := j.client.FetchAllStocksOHLCV(ctx, from, today)
+	if err != nil {
+		log.Printf("[job] stock_ohlcv: fetch: %v", err)
+		return
+	}
+	clean := CleanOHLCV(raw)
+	log.Printf("[job] stock_ohlcv: %d raw → %d clean (%s–%s)",
+		len(raw), len(clean), from.Format(dateLayout), today.Format(dateLayout))
+	if err := j.store.UpsertStockOHLCV(ctx, clean); err != nil {
+		log.Printf("[job] stock_ohlcv: upsert: %v", err)
+	}
+}
+
+func (j *MarketDataJob) syncForeignFlow(ctx context.Context, yesterday, firstRunFrom, today time.Time) {
+	from, skip := fetchFrom(yesterday, firstRunFrom, func() (time.Time, bool, error) {
+		return j.store.LatestForeignFlowDate(ctx)
+	})
+	if skip {
+		log.Printf("[job] foreign_flow: up to date, skipping")
+		return
+	}
+	raw, err := j.client.FetchForeignFlow(ctx, from, today)
+	if err != nil {
+		log.Printf("[job] foreign_flow: fetch: %v", err)
+		return
+	}
+	clean := CleanForeignFlow(raw)
+	log.Printf("[job] foreign_flow: %d raw → %d clean (%s–%s)",
+		len(raw), len(clean), from.Format(dateLayout), today.Format(dateLayout))
+	if err := j.store.UpsertForeignFlow(ctx, clean); err != nil {
+		log.Printf("[job] foreign_flow: upsert: %v", err)
+	}
+}
+
+func (j *MarketDataJob) syncIndexOHLCV(ctx context.Context, yesterday, firstRunFrom, today time.Time) {
+	from, skip := fetchFrom(yesterday, firstRunFrom, func() (time.Time, bool, error) {
+		return j.store.LatestIndexOHLCVDate(ctx, vnIndexSymbol)
+	})
+	if skip {
+		log.Printf("[job] index_ohlcv: up to date, skipping")
+		return
+	}
+	raw, err := j.client.FetchVNIndexOHLCV(ctx, from, today)
+	if err != nil {
+		log.Printf("[job] index_ohlcv: fetch: %v", err)
+		return
+	}
+	clean := CleanOHLCV(raw)
+	log.Printf("[job] index_ohlcv: %d raw → %d clean (%s–%s)",
+		len(raw), len(clean), from.Format(dateLayout), today.Format(dateLayout))
+	if err := j.store.UpsertIndexOHLCV(ctx, clean); err != nil {
+		log.Printf("[job] index_ohlcv: upsert: %v", err)
+	}
+}
+
 func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
-	// Load last 30 calendar days (~20 trading days) newest-first per symbol.
-	stockHistory, err := j.store.LoadRecentStockOHLCV(ctx, 30)
+	stockHistory, err := j.store.LoadRecentStockOHLCV(ctx, stockHistoryDays)
 	if err != nil {
 		log.Printf("[job] metrics: load stock history: %v", err)
 		return
 	}
 
-	// Load latest stored regime (computed from previous run) for score thresholds.
 	latestRegime, hasRegime, err := j.store.LoadLatestMarketRegime(ctx)
 	if err != nil {
 		log.Printf("[job] metrics: load latest regime: %v — defaulting to Choppy", err)
@@ -125,7 +133,6 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 		regimeLabel = latestRegime.Regime
 	}
 
-	// Load most recent foreign net buy flags per symbol.
 	foreignNetBuy, err := j.store.LoadLatestForeignNetBuy(ctx)
 	if err != nil {
 		log.Printf("[job] metrics: load foreign net buy: %v — defaulting to false", err)
@@ -149,8 +156,7 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 	}
 	log.Printf("[job] metrics: upserted %d stock_metrics records", len(metrics))
 
-	// Load last 150 calendar days (~21 weeks) oldest-first for weekly regime.
-	vnHistory, err := j.store.LoadRecentIndexOHLCV(ctx, vnIndexSymbol, 150)
+	vnHistory, err := j.store.LoadRecentIndexOHLCV(ctx, vnIndexSymbol, indexHistoryDays)
 	if err != nil {
 		log.Printf("[job] metrics: load vnindex history: %v", err)
 		return
@@ -165,7 +171,6 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 }
 
 func fetchFrom(
-	ctx context.Context,
 	yesterday, firstRunFrom time.Time,
 	latestFn func() (time.Time, bool, error),
 ) (from time.Time, skip bool) {

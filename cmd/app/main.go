@@ -69,7 +69,16 @@ func main() {
 	} else {
 		socialPoster = xPoster
 	}
-	_ = socialPoster // wire to jobs/handlers as needed
+
+	var aiClient output.AI
+	if cfg.OpenAI.APIKey != "" {
+		aiClient, err = modules.NewOpenAIClient(cfg.OpenAI)
+		if err != nil {
+			log.Printf("openai client disabled: %v", err)
+		} else {
+			log.Printf("AI signal interpretation enabled (model: %s)", cfg.OpenAI.Model)
+		}
+	}
 
 	// Run schema migration once at startup before the first job execution.
 	if err := store.Migrate(context.Background()); err != nil {
@@ -79,9 +88,9 @@ func main() {
 	// -----------------------------------------------------------------------
 	// Cron scheduler – all times are Vietnam local time (ICT, UTC+7)
 	// -----------------------------------------------------------------------
-	ict, err := time.LoadLocation("Asia/Ho_Chi_Minh")
+	ict, err := time.LoadLocation(cfg.ATO.Timezone)
 	if err != nil {
-		log.Fatalf("load Asia/Ho_Chi_Minh timezone: %v", err)
+		log.Fatalf("load timezone %s: %v", cfg.ATO.Timezone, err)
 	}
 
 	c := cron.New(cron.WithLocation(ict))
@@ -93,7 +102,7 @@ func main() {
 
 	// Monitor ATO order book for stocks flagged overnight.
 	// The job self-terminates at 09:15 ICT via an internal context deadline.
-	if _, err := c.AddJob(cfg.Cron.ATOMonitor, job.NewATOMonitorJob(store, obClient, notifier, cfg.Signal)); err != nil {
+	if _, err := c.AddJob(cfg.Cron.ATOMonitor, job.NewATOMonitorJob(store, obClient, notifier, socialPoster, aiClient, cfg.Signal, cfg.ATO)); err != nil {
 		log.Fatalf("register ATO monitor cron job: %v", err)
 	}
 

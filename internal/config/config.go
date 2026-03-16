@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
@@ -18,6 +19,19 @@ type Config struct {
 	OpenAI         OpenAIConfig   `mapstructure:"openai"`
 	Signal         SignalConfig   `mapstructure:"signal"`
 	Cron           CronConfig     `mapstructure:"cron"`
+	ATO            ATOConfig      `mapstructure:"ato"`
+}
+
+type ATOConfig struct {
+	Timezone         string        `mapstructure:"timezone"`
+	PollInterval     time.Duration `mapstructure:"poll_interval"`
+	EndHour          int           `mapstructure:"end_hour"`
+	EndMinute        int           `mapstructure:"end_minute"`
+	DropHour         int           `mapstructure:"drop_hour"`
+	DropMinute       int           `mapstructure:"drop_minute"`
+	SignalStopHour   int           `mapstructure:"signal_stop_hour"`
+	SignalStopMinute int           `mapstructure:"signal_stop_minute"`
+	AITimeout        time.Duration `mapstructure:"ai_timeout"`
 }
 
 type OpenAIConfig struct {
@@ -223,6 +237,35 @@ func Load(path string) (*Config, error) {
 
 	if cfg.OpenAI.Model == "" {
 		cfg.OpenAI.Model = "gpt-4o-mini"
+	}
+
+	a := &cfg.ATO
+	if a.Timezone == "" {
+		a.Timezone = "Asia/Ho_Chi_Minh"
+	}
+	if a.PollInterval == 0 {
+		a.PollInterval = 2 * time.Second
+	}
+	if a.EndHour == 0 {
+		a.EndHour = 9
+	}
+	if a.EndMinute == 0 {
+		a.EndMinute = 15
+	}
+	if a.DropHour == 0 {
+		a.DropHour = 9
+	}
+	if a.DropMinute == 0 {
+		a.DropMinute = 7
+	}
+	if a.SignalStopHour == 0 {
+		a.SignalStopHour = 9
+	}
+	if a.SignalStopMinute == 0 {
+		a.SignalStopMinute = 14
+	}
+	if a.AITimeout == 0 {
+		a.AITimeout = 30 * time.Second
 	}
 
 	return &cfg, nil

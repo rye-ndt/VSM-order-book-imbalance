@@ -49,3 +49,14 @@ signal:
   choppy_half_score:
   bear_full_score:
   bear_half_score:
+
+ato:
+  timezone: "Asia/Ho_Chi_Minh"
+  poll_interval: 2s
+  end_hour: 9
+  end_minute: 15
+  drop_hour: 9
+  drop_minute: 7
+  signal_stop_hour: 9
+  signal_stop_minute: 14
+  ai_timeout: 30s
