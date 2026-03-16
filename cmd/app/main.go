@@ -62,6 +62,15 @@ func main() {
 		go tgBot.Run(context.Background())
 	}
 
+	var socialPoster output.SocialPoster
+	xPoster, err := modules.NewXPoster(cfg.Twitter)
+	if err != nil {
+		log.Printf("x (twitter) poster disabled: %v", err)
+	} else {
+		socialPoster = xPoster
+	}
+	_ = socialPoster // wire to jobs/handlers as needed
+
 	// Run schema migration once at startup before the first job execution.
 	if err := store.Migrate(context.Background()); err != nil {
 		log.Fatalf("migrate market tables: %v", err)

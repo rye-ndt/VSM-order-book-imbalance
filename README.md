@@ -114,19 +114,20 @@ internal/
 
   interface/
     input/          — ports: StockDataClient, OrderBookClient, RelationalDB; shared types (OHLCV, ForeignFlow, OrderBookSnapshot)
-    output/         — ports: MarketStore, Notifier; shared types (StockMetrics, MarketRegime, SignalRecord, WatchlistEntry)
+    output/         — ports: MarketStore, Notifier, SocialPoster; shared types (StockMetrics, MarketRegime, SignalRecord, WatchlistEntry)
 
   modules/          — adapters:
                       SSIStockClient       — REST: DailyOhlc + DailyStockPrice, paginated, token-cached
                       SSIOrderBookClient   — WebSocket IDS: Quote + Trade message handling, per-symbol snapshot cache
                       PostgresMarketStore  — all DB reads/writes, idempotent migration
                       TelegramNotifier     — signal alert delivery
+                      XPoster              — Twitter API v2 (gotwi, OAuth 1.0a), implements SocialPoster port
 
   server/
     server.go       — GET /healthz, GET /imbalance (placeholder)
 
   config/
-    config.go       — YAML config loader (DB, SSI credentials, Telegram, HTTP listen addr)
+    config.go       — YAML config loader (DB, SSI credentials, Telegram, Twitter, HTTP listen addr, signal thresholds)
 ```
 
 ---
@@ -166,10 +167,15 @@ The cleaner correctly filters zero-volume rows (today's market was still open at
 
 `signal_log` is empty — no signals have fired yet.
 
+### Social posting (X / Twitter) — implemented, not yet configured
+`SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent. Intended for daily market status posts.
+
 ### Pending
 - Configure Telegram (`bot_token` + `chat_id`) to receive signal alerts
+- Fill in `twitter:` credentials in `config.yaml` to enable X posting
 - Observe a live ATO session to confirm signal firing and `signal_log` writes
 - Back-fill outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns) once T+2 prices are available
+- Wire `SocialPoster` into a scheduled daily post (job or cron entry)
 
 ---
 
@@ -178,7 +184,8 @@ The cleaner correctly filters zero-volume rows (today's market was still open at
 - Go 1.24+
 - PostgreSQL
 - SSI FastConnectData credentials (`consumer_id` + `consumer_secret`)
-- Telegram bot token + chat ID
+- Telegram bot token + chat ID (optional)
+- X (Twitter) OAuth 1.0a credentials — API key/secret + access token/secret (optional)
 
 ## Getting started
 

@@ -14,6 +14,7 @@ type Config struct {
 	DB             DBConfig       `mapstructure:"db"`
 	SSI            SSIConfig      `mapstructure:"ssi"`
 	Telegram       TelegramConfig `mapstructure:"telegram"`
+	Twitter        TwitterConfig  `mapstructure:"twitter"`
 	Signal         SignalConfig   `mapstructure:"signal"`
 }
 
@@ -82,6 +83,20 @@ type SignalConfig struct {
 	// Suggested: Full ≥ 12, Half ≥ 9
 	BearFullScore int `mapstructure:"bear_full_score"`
 	BearHalfScore int `mapstructure:"bear_half_score"`
+}
+
+// TwitterConfig holds OAuth 1.0a credentials for posting to X (Twitter).
+// Obtain all four values from the X Developer Portal (developer.twitter.com)
+// under your app's "Keys and Tokens" section.
+type TwitterConfig struct {
+	// APIKey is the OAuth 1.0a Consumer Key (also called "API Key").
+	APIKey string `mapstructure:"api_key"`
+	// APIKeySecret is the OAuth 1.0a Consumer Secret (also called "API Key Secret").
+	APIKeySecret string `mapstructure:"api_key_secret"`
+	// AccessToken is the per-account OAuth 1.0a access token.
+	AccessToken string `mapstructure:"access_token"`
+	// AccessTokenSecret is the per-account OAuth 1.0a access token secret.
+	AccessTokenSecret string `mapstructure:"access_token_secret"`
 }
 
 // TelegramConfig holds credentials for the Telegram notification bot.
