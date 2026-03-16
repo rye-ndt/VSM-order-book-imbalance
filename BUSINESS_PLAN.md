@@ -56,13 +56,12 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 | Nightly data pipeline | Complete and live-verified |
 | Metrics computation (10 factors) | Complete |
 | ATO monitor (signal gate) | Coded, not yet live-tested |
-| Telegram notifier (single recipient) | Complete |
+| Multi-tenant Telegram bot (subscribe/unsubscribe, /signal command) | Complete |
 | signal_log (event study) | Schema live, 0 rows (not yet fired) |
-| AI signal interpretation (Interpret, XInterpret, TelegramInterpret) | Implemented, not yet wired to ATO job |
-| Multi-tenant Telegram bot | 0% |
-| Subscription/payment | 0% |
+| AI signal interpretation (Interpret, XInterpret, TelegramInterpret) | Complete — wired into ATO job, posts to X and Telegram after each signal |
 | Corporate events filter | 0% |
 | Foreign ownership room | 0% |
+| Subscription/payment | 0% |
 
 **Live data as of 2026-03-16:** 18,673 OHLCV rows, 63,602 foreign flow rows, 1,437 stock_metrics rows, regime = Bear.
 
@@ -175,11 +174,12 @@ SSI FastConnectData terms likely prohibit redistribution of real-time data. Viet
 
 | Week | Milestone |
 |---|---|
+| ~~1–2~~ | ~~Build multi-tenant Telegram bot.~~ ✓ Done |
+| ~~2–3~~ | ~~Wire AI interpretation into ATO job.~~ ✓ Done |
 | 1–2 | Live-test ATO monitor across multiple sessions. Fix any issues. |
 | 3 | Add corporate events filter. |
 | 4 | Launch free Tier 1 (X bot + Telegram channel). Start publishing signal outcomes publicly. |
 | 5–8 | Accumulate track record (30+ signals with D0/D1/D2 outcomes). Build audience. |
 | 9 | Add foreign ownership room data. |
-| 10 | Build multi-tenant Telegram bot (per-user subscription gating). |
-| 11 | Add subscription/payment (Stripe or VNPay). |
-| 12 | Launch paid Tier 2 and Tier 3. |
+| 10 | Add subscription/payment gating (Stripe or VNPay). |
+| 11–12 | Launch paid Tier 2 and Tier 3. |

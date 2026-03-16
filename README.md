@@ -136,7 +136,7 @@ internal/
                       SSIStockClient       — REST: DailyOhlc + DailyStockPrice, paginated, token-cached
                       SSIOrderBookClient   — WebSocket IDS: Quote + Trade message handling, per-symbol snapshot cache
                       PostgresMarketStore  — all DB reads/writes, idempotent migration
-                      TelegramNotifier     — signal alert delivery
+                      TelegramBot          — multi-tenant bot: subscriber management, /start /hello /signal /subscribe /unsubscribe commands, broadcasts to all subscribers
                       XPoster              — Twitter API v2 (gotwi, OAuth 1.0a), implements SocialPoster port
                       OpenAIClient         — implements AI port: Interpret (structured JSON), XInterpret (X post), TelegramInterpret (Telegram paragraph)
 
@@ -159,6 +159,7 @@ internal/
 | `stock_metrics` | Nightly per-symbol metrics + final score + position size flag |
 | `market_regime` | Daily Bull / Bear / Choppy classification |
 | `signal_log` | Full event study snapshot per ATO signal fire |
+| `bot_subscribers` | Telegram chat IDs subscribed to signal broadcasts |
 
 Schema migrations run automatically at startup via `Migrate()` using `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
@@ -187,17 +188,19 @@ The cleaner correctly filters zero-volume rows (today's market was still open at
 ### Social posting (X / Twitter) — implemented, not yet configured
 `SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent. Intended for daily market status posts.
 
-### AI signal interpretation — implemented, not yet wired
-`OpenAIClient` implements `Interpret`, `XInterpret`, and `TelegramInterpret`. Config accepts `openai.api_key` and `openai.model` (default `gpt-4o-mini`). Not yet wired into `ATOMonitorJob` or `main.go` — follow-up messages are not yet sent.
+### AI signal interpretation — implemented and wired
+`OpenAIClient` implements `Interpret`, `XInterpret`, and `TelegramInterpret`. Config accepts `openai.api_key` and `openai.model` (default `gpt-4o-mini`). Wired into `ATOMonitorJob`: after each signal fires, a goroutine calls `Interpret` within the configured `ai_timeout`, then posts the X text via `SocialPoster` and the Telegram paragraph via `Notifier`.
+
+### Multi-tenant Telegram bot — implemented
+`TelegramBot` replaces the single-recipient `TelegramNotifier`. It handles commands (`/start`, `/hello`, `/signal`, `/subscribe`, `/unsubscribe`) and broadcasts signal alerts to all subscribers stored in `bot_subscribers`. The `/signal` command returns today's fired signals with entry price, TP, and position size flag.
 
 ### Pending
-- Wire `OpenAIClient` into `main.go` (construct when `openai.api_key` is set, pass to `ATOMonitorJob`)
-- Wire AI follow-up into `ato_monitor.go`: goroutine after `store.LogSignal`, 5-second deadline, silent on failure
-- Configure Telegram (`bot_token` + `chat_id`) to receive signal alerts
-- Fill in `twitter:` credentials in `config.yaml` to enable X posting
 - Observe a live ATO session to confirm signal firing and `signal_log` writes
 - Back-fill outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns) once T+2 prices are available
-- Wire `SocialPoster` into a scheduled daily post (job or cron entry)
+- Add corporate events filter (ex-dividend / rights issue days)
+- Add foreign ownership room data
+- Add subscription/payment gating (Stripe or VNPay)
+- Wire `SocialPoster` into a scheduled daily post for regime + watchlist count
 
 ---
 
