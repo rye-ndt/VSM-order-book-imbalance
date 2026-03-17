@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -38,7 +39,11 @@ func main() {
 	log.Println("migration OK")
 
 	log.Println("running MarketDataJob...")
-	j := job.NewMarketDataJob(stockClient, store, cfg.Signal)
+	ict, err := time.LoadLocation(cfg.ATO.Timezone)
+	if err != nil {
+		log.Fatalf("load timezone: %v", err)
+	}
+	j := job.NewMarketDataJob(stockClient, store, cfg.Signal, ict)
 	j.Run()
 	log.Println("job complete")
 

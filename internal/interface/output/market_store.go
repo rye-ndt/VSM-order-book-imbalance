@@ -144,6 +144,22 @@ type MarketStore interface {
 
 	// LogSignal persists a signal_log row when an ATO signal fires.
 	LogSignal(ctx context.Context, r SignalRecord) error
+
+	// MarkMarketDataCrawled records that the nightly market data pipeline ran
+	// successfully for the given calendar date.
+	MarkMarketDataCrawled(ctx context.Context, date time.Time) error
+
+	// MarkATOMonitored records that the ATO monitoring session was started for
+	// the given calendar date.
+	MarkATOMonitored(ctx context.Context, date time.Time) error
+
+	// IsTodayMarketDataCrawled reports whether the nightly pipeline has already
+	// been marked as completed for the given date.
+	IsTodayMarketDataCrawled(ctx context.Context, date time.Time) (bool, error)
+
+	// IsTodayATOMonitored reports whether an ATO session has already been
+	// started for the given date.
+	IsTodayATOMonitored(ctx context.Context, date time.Time) (bool, error)
 }
 
 // WatchlistEntry is one row from the morning watchlist query.

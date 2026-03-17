@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/example/order-book-imbalance/internal/calculator"
@@ -21,6 +22,7 @@ type ATOMonitorJob struct {
 	ai           output.AI
 	signal       config.SignalConfig
 	ato          config.ATOConfig
+	mu           sync.Mutex
 }
 
 type atoCandidate struct {
@@ -52,6 +54,12 @@ func NewATOMonitorJob(
 }
 
 func (j *ATOMonitorJob) Run() {
+	if !j.mu.TryLock() {
+		log.Printf("[ato] already running, skipping")
+		return
+	}
+	defer j.mu.Unlock()
+
 	loc, err := time.LoadLocation(j.ato.Timezone)
 	if err != nil {
 		log.Printf("[ato] load timezone: %v", err)
@@ -110,6 +118,11 @@ func (j *ATOMonitorJob) Run() {
 	if err := j.obClient.Subscribe(ctx, symbols); err != nil {
 		log.Printf("[ato] subscribe: %v", err)
 		return
+	}
+
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	if err := j.store.MarkATOMonitored(context.Background(), today); err != nil {
+		log.Printf("[ato] mark monitored: %v", err)
 	}
 
 	windows := make(map[string]*calculator.StabilityWindow, len(active))

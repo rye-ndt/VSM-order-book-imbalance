@@ -129,6 +129,14 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 			chat_id       BIGINT      PRIMARY KEY,
 			subscribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		CREATE TABLE IF NOT EXISTS daily_crawl_status (
+			trading_date        DATE        NOT NULL PRIMARY KEY,
+			market_data_crawled BOOLEAN     NOT NULL DEFAULT FALSE,
+			ato_monitored       BOOLEAN     NOT NULL DEFAULT FALSE,
+			created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -563,6 +571,56 @@ func (s *PostgresMarketStore) LoadTodaySignals(ctx context.Context) ([]TodaySign
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+func (s *PostgresMarketStore) MarkMarketDataCrawled(ctx context.Context, date time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO daily_crawl_status (trading_date, market_data_crawled, updated_at)
+		VALUES ($1::date, true, NOW())
+		ON CONFLICT (trading_date) DO UPDATE SET
+			market_data_crawled = true,
+			updated_at          = NOW()
+	`, date)
+	return err
+}
+
+func (s *PostgresMarketStore) MarkATOMonitored(ctx context.Context, date time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO daily_crawl_status (trading_date, ato_monitored, updated_at)
+		VALUES ($1::date, true, NOW())
+		ON CONFLICT (trading_date) DO UPDATE SET
+			ato_monitored = true,
+			updated_at    = NOW()
+	`, date)
+	return err
+}
+
+func (s *PostgresMarketStore) IsTodayMarketDataCrawled(ctx context.Context, date time.Time) (bool, error) {
+	var crawled bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(
+			(SELECT market_data_crawled FROM daily_crawl_status WHERE trading_date = $1::date),
+			false
+		)
+	`, date).Scan(&crawled)
+	if err != nil {
+		return false, fmt.Errorf("check market data crawled: %w", err)
+	}
+	return crawled, nil
+}
+
+func (s *PostgresMarketStore) IsTodayATOMonitored(ctx context.Context, date time.Time) (bool, error) {
+	var monitored bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(
+			(SELECT ato_monitored FROM daily_crawl_status WHERE trading_date = $1::date),
+			false
+		)
+	`, date).Scan(&monitored)
+	if err != nil {
+		return false, fmt.Errorf("check ato monitored: %w", err)
+	}
+	return monitored, nil
 }
 
 func (s *PostgresMarketStore) AddSubscriber(ctx context.Context, chatID int64) error {

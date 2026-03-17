@@ -41,6 +41,9 @@ type ForeignFlow struct {
 // cron job) can request only the days that are actually missing from the store,
 // avoiding redundant API calls for already-persisted data.
 type StockDataClient interface {
+	// Ping verifies that the SSI REST API is reachable and credentials are valid.
+	Ping(ctx context.Context) error
+
 	// FetchAllStocksOHLCV returns daily OHLCV for every listed equity in the
 	// [from, to] date range, paginating through all results from DailyOhlc.
 	FetchAllStocksOHLCV(ctx context.Context, from, to time.Time) ([]OHLCV, error)

@@ -85,6 +85,11 @@ type ssiAuthResponse struct {
 	Data    ssiAuthData  `json:"data"`
 }
 
+func (c *SSIStockClient) Ping(ctx context.Context) error {
+	_, err := c.bearerToken(ctx)
+	return err
+}
+
 // bearerToken returns a valid access token, fetching a new one when the cache
 // has expired. It is safe for concurrent use.
 func (c *SSIStockClient) bearerToken(ctx context.Context) (string, error) {

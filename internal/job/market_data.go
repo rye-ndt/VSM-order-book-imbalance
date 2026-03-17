@@ -23,24 +23,27 @@ const (
 )
 
 type MarketDataJob struct {
-	client input.StockDataClient
-	store  output.MarketStore
-	signal config.SignalConfig
+	client   input.StockDataClient
+	store    output.MarketStore
+	signal   config.SignalConfig
+	location *time.Location
 }
 
 func NewMarketDataJob(
 	client input.StockDataClient,
 	store output.MarketStore,
 	signal config.SignalConfig,
+	location *time.Location,
 ) *MarketDataJob {
-	return &MarketDataJob{client: client, store: store, signal: signal}
+	return &MarketDataJob{client: client, store: store, signal: signal, location: location}
 }
 
 func (j *MarketDataJob) Run() {
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 	defer cancel()
 
-	today := truncateDay(time.Now())
+	now := time.Now().In(j.location)
+	today := truncateDay(now)
 	yesterday := today.AddDate(0, 0, -1)
 	firstRunFrom := today.Add(-defaultLookback)
 
@@ -52,6 +55,10 @@ func (j *MarketDataJob) Run() {
 	wg.Wait()
 
 	j.runMetricsPipeline(ctx)
+
+	if err := j.store.MarkMarketDataCrawled(ctx, today); err != nil {
+		log.Printf("[job] mark market data crawled: %v", err)
+	}
 }
 
 func (j *MarketDataJob) syncStockOHLCV(ctx context.Context, yesterday, firstRunFrom, today time.Time) {

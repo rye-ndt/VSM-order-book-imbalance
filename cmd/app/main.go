@@ -27,9 +27,6 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	// -----------------------------------------------------------------------
-	// Database
-	// -----------------------------------------------------------------------
 	dbAdapter := modules.NewPostgresRelationalDB(cfg.DB)
 	db, err := dbAdapter.Connect(context.Background())
 	if err != nil {
@@ -37,16 +34,6 @@ func main() {
 	}
 	defer db.Close()
 
-	// -----------------------------------------------------------------------
-	// Dependency injection
-	//
-	// Both dependencies are expressed as interfaces (the output/input ports).
-	// Swap either constructor below to change the storage backend or data
-	// source without touching any other file.
-	//
-	//   stockClient  →  input.StockDataClient
-	//   store        →  output.MarketStore
-	// -----------------------------------------------------------------------
 	stockClient := modules.NewSSIStockClient(cfg.SSI)
 	store := modules.NewPostgresMarketStore(db)
 	obClient := modules.NewSSIOrderBookClient(cfg.SSI)
@@ -80,38 +67,61 @@ func main() {
 		}
 	}
 
-	// Run schema migration once at startup before the first job execution.
 	if err := store.Migrate(context.Background()); err != nil {
 		log.Fatalf("migrate market tables: %v", err)
 	}
 
-	// -----------------------------------------------------------------------
-	// Cron scheduler – all times are Vietnam local time (ICT, UTC+7)
-	// -----------------------------------------------------------------------
 	ict, err := time.LoadLocation(cfg.ATO.Timezone)
 	if err != nil {
 		log.Fatalf("load timezone %s: %v", cfg.ATO.Timezone, err)
 	}
 
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer pingCancel()
+	if err := stockClient.Ping(pingCtx); err != nil {
+		log.Printf("[startup] SSI REST API ping failed: %v", err)
+	} else {
+		log.Printf("[startup] SSI REST API: OK")
+	}
+	if err := obClient.Ping(pingCtx); err != nil {
+		log.Printf("[startup] SSI IDS ping failed: %v", err)
+	} else {
+		log.Printf("[startup] SSI IDS: OK")
+	}
+
+	marketDataJob := job.NewMarketDataJob(stockClient, store, cfg.Signal, ict)
+	atoMonitorJob := job.NewATOMonitorJob(store, obClient, notifier, socialPoster, aiClient, cfg.Signal, cfg.ATO)
+
+	today := time.Now().In(ict)
+	crawled, err := store.IsTodayMarketDataCrawled(context.Background(), today)
+	if err != nil {
+		log.Printf("[startup] check market data crawl status: %v", err)
+	} else if !crawled {
+		log.Printf("[startup] market data not crawled today, running pipeline now")
+		go marketDataJob.Run()
+	}
+
+	monitored, err := store.IsTodayATOMonitored(context.Background(), today)
+	if err != nil {
+		log.Printf("[startup] check ATO monitor status: %v", err)
+	} else if !monitored {
+		log.Printf("[startup] ATO session not monitored today, running now")
+		go atoMonitorJob.Run()
+	}
+
 	c := cron.New(cron.WithLocation(ict))
 
-	// Fetch previous day's market data and compute stock metrics.
-	if _, err := c.AddJob(cfg.Cron.MarketData, job.NewMarketDataJob(stockClient, store, cfg.Signal)); err != nil {
+	if _, err := c.AddJob(cfg.Cron.MarketData, marketDataJob); err != nil {
 		log.Fatalf("register market data cron job: %v", err)
 	}
 
-	// Monitor ATO order book for stocks flagged overnight.
-	// The job self-terminates at 09:15 ICT via an internal context deadline.
-	if _, err := c.AddJob(cfg.Cron.ATOMonitor, job.NewATOMonitorJob(store, obClient, notifier, socialPoster, aiClient, cfg.Signal, cfg.ATO)); err != nil {
+	if _, err := c.AddJob(cfg.Cron.ATOMonitor, atoMonitorJob); err != nil {
 		log.Fatalf("register ATO monitor cron job: %v", err)
 	}
 
 	c.Start()
 	defer c.Stop()
 
-	// -----------------------------------------------------------------------
-	// HTTP server
-	// -----------------------------------------------------------------------
 	srv := server.NewHTTPServer(cfg)
 	log.Printf("starting HTTP server on %s", cfg.HTTPListenAddr)
 	if err := http.ListenAndServe(cfg.HTTPListenAddr, srv.Router()); err != nil {

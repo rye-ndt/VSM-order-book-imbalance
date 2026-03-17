@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -186,9 +187,47 @@ func (c *SSIOrderBookClient) bearerToken(ctx context.Context) (string, error) {
 	return c.cachedToken, nil
 }
 
+func (c *SSIOrderBookClient) Ping(ctx context.Context) error {
+	token, err := c.bearerToken(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.signalRNegotiate(ctx, token)
+	return err
+}
+
 // -------------------------------------------------------------------------
 // Subscribe
 // -------------------------------------------------------------------------
+
+type ssiSignalRNegotiateResponse struct {
+	ConnectionToken string `json:"ConnectionToken"`
+}
+
+func (c *SSIOrderBookClient) signalRNegotiate(ctx context.Context, token string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.cfg.StreamURL+"/negotiate", nil)
+	if err != nil {
+		return "", fmt.Errorf("ssi ob negotiate: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ssi ob negotiate: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(resp.Body)
+	var nr ssiSignalRNegotiateResponse
+	if err := json.Unmarshal(raw, &nr); err != nil {
+		return "", fmt.Errorf("ssi ob negotiate: decode: %w", err)
+	}
+	if nr.ConnectionToken == "" {
+		return "", fmt.Errorf("ssi ob negotiate: empty connection token (body: %s)", string(raw))
+	}
+	return nr.ConnectionToken, nil
+}
 
 func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) error {
 	if c.cfg.StreamURL == "" {
@@ -200,12 +239,40 @@ func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) er
 		return err
 	}
 
-	wsURL := c.cfg.StreamURL + "?token=" + token
+	connToken, err := c.signalRNegotiate(ctx, token)
+	if err != nil {
+		return err
+	}
 
+	encodedToken := url.QueryEscape(connToken)
+
+	// stream_url is https://...; replace scheme for WebSocket dial.
+	wsBase := strings.NewReplacer("https://", "wss://", "http://", "ws://").Replace(c.cfg.StreamURL)
+	wsURL := wsBase + "/connect?transport=webSockets&clientProtocol=1.2&connectionToken=" + encodedToken
+
+	hdr := http.Header{"Authorization": {"Bearer " + token}}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+	conn, _, err := dialer.DialContext(ctx, wsURL, hdr)
 	if err != nil {
 		return fmt.Errorf("ssi ob: websocket dial: %w", err)
+	}
+
+	startReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.cfg.StreamURL+"/start?transport=webSockets&clientProtocol=1.2&connectionToken="+encodedToken, nil)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("ssi ob: build /start request: %w", err)
+	}
+	startReq.Header.Set("Authorization", "Bearer "+token)
+	startResp, err := c.httpClient.Do(startReq)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("ssi ob: /start: %w", err)
+	}
+	startResp.Body.Close()
+	if startResp.StatusCode != 200 {
+		conn.Close()
+		return fmt.Errorf("ssi ob: /start returned HTTP %d", startResp.StatusCode)
 	}
 
 	subMsg := ssiIDSSubRequest{

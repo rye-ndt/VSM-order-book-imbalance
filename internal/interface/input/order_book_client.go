@@ -17,6 +17,10 @@ var ErrNoSnapshot = errors.New("order book: no snapshot available yet")
 // once via Subscribe, cache the latest snapshot per symbol, and return that
 // cached value on each FetchOrderBook call.
 type OrderBookClient interface {
+	// Ping verifies that the SSI IDS endpoint is reachable and a SignalR
+	// connection token can be obtained.
+	Ping(ctx context.Context) error
+
 	// Subscribe connects to the data source and begins receiving order book
 	// updates for the given symbols. The provided context governs the lifetime
 	// of the underlying connection; cancel it to tear down the connection
