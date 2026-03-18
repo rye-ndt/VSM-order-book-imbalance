@@ -160,6 +160,7 @@ internal/
 | `market_regime` | Daily Bull / Bear / Choppy classification |
 | `signal_log` | Full event study snapshot per ATO signal fire |
 | `bot_subscribers` | Telegram chat IDs subscribed to signal broadcasts |
+| `daily_crawl_status` | Per-day flags: `market_data_crawled` (set after nightly pipeline) and `ato_monitored` (set at ATO session start) — prevents duplicate runs on cold-start |
 
 Schema migrations run automatically at startup via `Migrate()` using `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
@@ -180,8 +181,10 @@ The full nightly pipeline has been run end-to-end against the live SSI FastConne
 
 The cleaner correctly filters zero-volume rows (today's market was still open at fetch time) and drops symbols with fewer than 5 trading days in the window (newly listed / suspended).
 
-### Morning ATO monitor — implemented, not yet live-tested
-`ATOMonitorJob` is fully coded: watchlist loading, SSI IDS WebSocket subscription, 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. It has not yet run during a live ATO session (09:00–09:15 ICT), so end-to-end signal firing has not been observed.
+### Morning ATO monitor — connection-fixed, not yet live-tested
+`ATOMonitorJob` is fully implemented: watchlist loading, SSI IDS WebSocket subscription (SignalR negotiate → connect → `/start` handshake), 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. Cold-start protection is in place via `daily_crawl_status.ato_monitored` — a re-launched process will not re-run the session for the same trading day.
+
+It has not yet run during a live ATO session (09:00–09:15 ICT), so end-to-end signal firing has not been observed.
 
 `signal_log` is empty — no signals have fired yet.
 

@@ -104,8 +104,21 @@ type MarketRegime struct {
 	Regime      RegimeLabel
 }
 
+type SessionLogEntry struct {
+	SessionDate time.Time
+	Level       string // INFO, WARN, ERROR
+	Component   string // e.g. "ato"
+	Symbol      string // empty if not symbol-specific
+	Event       string // machine-readable e.g. "first_quote", "gate_blocked"
+	Message     string
+}
+
 type MarketStore interface {
 	Migrate(ctx context.Context) error
+
+	// AppendSessionLog writes a single append-only log entry for an ATO session
+	// so that post-session analysis can be done even if the process crashed.
+	AppendSessionLog(ctx context.Context, e SessionLogEntry) error
 
 	UpsertStockOHLCV(ctx context.Context, records []input.OHLCV) error
 	UpsertForeignFlow(ctx context.Context, records []input.ForeignFlow) error

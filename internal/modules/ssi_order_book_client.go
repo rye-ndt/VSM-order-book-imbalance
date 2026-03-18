@@ -337,10 +337,16 @@ func (c *SSIOrderBookClient) handleTrade(content string) {
 		return
 	}
 	c.priceMu.Lock()
+	prev, seen := c.lastEstMatchedPrice[t.Symbol]
+	changed := !seen || prev != t.EstMatchedPrice
 	c.lastEstMatchedPrice[t.Symbol] = t.EstMatchedPrice
 	c.lastCeilingPrice[t.Symbol] = t.Ceiling
 	c.lastRefPrice[t.Symbol] = t.RefPrice
 	c.priceMu.Unlock()
+	if changed {
+		log.Printf("[ssi-ob] trade %s  est=%.0f  ceil=%.0f  ref=%.0f",
+			t.Symbol, t.EstMatchedPrice, t.Ceiling, t.RefPrice)
+	}
 }
 
 func (c *SSIOrderBookClient) handleQuote(content string) {

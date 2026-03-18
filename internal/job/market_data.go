@@ -27,6 +27,7 @@ type MarketDataJob struct {
 	store    output.MarketStore
 	signal   config.SignalConfig
 	location *time.Location
+	mu       sync.Mutex
 }
 
 func NewMarketDataJob(
@@ -39,6 +40,12 @@ func NewMarketDataJob(
 }
 
 func (j *MarketDataJob) Run() {
+	if !j.mu.TryLock() {
+		log.Printf("[job] market data: already running, skipping")
+		return
+	}
+	defer j.mu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 	defer cancel()
 
@@ -131,14 +138,24 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 		return
 	}
 
-	latestRegime, hasRegime, err := j.store.LoadLatestMarketRegime(ctx)
+	vnHistory, err := j.store.LoadRecentIndexOHLCV(ctx, vnIndexSymbol, indexHistoryDays)
 	if err != nil {
-		log.Printf("[job] metrics: load latest regime: %v — defaulting to Choppy", err)
+		log.Printf("[job] metrics: load vnindex history: %v", err)
+		return
 	}
-	regimeLabel := output.RegimeChoppy
-	if hasRegime {
-		regimeLabel = latestRegime.Regime
+	if len(vnHistory) == 0 {
+		log.Printf("[job] metrics: vnindex history empty — regime not computed (no index data in DB)")
+		return
 	}
+	log.Printf("[job] metrics: vnindex history loaded: %d candles (%s – %s)",
+		len(vnHistory), vnHistory[0].TradingDate, vnHistory[len(vnHistory)-1].TradingDate)
+
+	regime := calculator.ComputeRegime(vnHistory)
+	if err := j.store.UpsertMarketRegime(ctx, regime); err != nil {
+		log.Printf("[job] metrics: upsert market_regime: %v", err)
+		return
+	}
+	log.Printf("[job] metrics: market_regime = %s on %s", regime.Regime, regime.TradingDate)
 
 	foreignNetBuy, err := j.store.LoadLatestForeignNetBuy(ctx)
 	if err != nil {
@@ -150,7 +167,7 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 	for symbol, candles := range stockHistory {
 		if m, ok := calculator.ComputeStockMetrics(symbol, candles); ok {
 			m.ShouldMonitorToday = calculator.ShouldMonitorToday(m)
-			m.Regime = regimeLabel
+			m.Regime = regime.Regime
 			m.ForeignNetBuy = foreignNetBuy[symbol]
 			m.FinalScore, m.PositionSizeFlag = calculator.ComputeFinalScore(m, j.signal)
 			metrics = append(metrics, m)
@@ -162,19 +179,6 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 		return
 	}
 	log.Printf("[job] metrics: upserted %d stock_metrics records", len(metrics))
-
-	vnHistory, err := j.store.LoadRecentIndexOHLCV(ctx, vnIndexSymbol, indexHistoryDays)
-	if err != nil {
-		log.Printf("[job] metrics: load vnindex history: %v", err)
-		return
-	}
-
-	regime := calculator.ComputeRegime(vnHistory)
-	if err := j.store.UpsertMarketRegime(ctx, regime); err != nil {
-		log.Printf("[job] metrics: upsert market_regime: %v", err)
-		return
-	}
-	log.Printf("[job] metrics: market_regime = %s on %s", regime.Regime, regime.TradingDate)
 }
 
 func fetchFrom(

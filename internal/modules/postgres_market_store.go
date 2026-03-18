@@ -137,6 +137,18 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 			created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		CREATE TABLE IF NOT EXISTS ato_session_log (
+			id           BIGSERIAL   PRIMARY KEY,
+			session_date DATE        NOT NULL,
+			logged_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			level        TEXT        NOT NULL DEFAULT 'INFO',
+			component    TEXT        NOT NULL,
+			symbol       TEXT,
+			event        TEXT        NOT NULL,
+			message      TEXT        NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS ato_session_log_session_date_idx ON ato_session_log (session_date);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -571,6 +583,18 @@ func (s *PostgresMarketStore) LoadTodaySignals(ctx context.Context) ([]TodaySign
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+func (s *PostgresMarketStore) AppendSessionLog(ctx context.Context, e output.SessionLogEntry) error {
+	var sym *string
+	if e.Symbol != "" {
+		sym = &e.Symbol
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO ato_session_log (session_date, level, component, symbol, event, message)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, e.SessionDate, e.Level, e.Component, sym, e.Event, e.Message)
+	return err
 }
 
 func (s *PostgresMarketStore) MarkMarketDataCrawled(ctx context.Context, date time.Time) error {

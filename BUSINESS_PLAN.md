@@ -55,7 +55,7 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 |---|---|
 | Nightly data pipeline | Complete and live-verified |
 | Metrics computation (10 factors) | Complete |
-| ATO monitor (signal gate) | Coded, not yet live-tested |
+| ATO monitor (signal gate) | Connection-fixed, cold-start protected, not yet live-tested |
 | Multi-tenant Telegram bot (subscribe/unsubscribe, /signal command) | Complete |
 | signal_log (event study) | Schema live, 0 rows (not yet fired) |
 | AI signal interpretation (Interpret, XInterpret, TelegramInterpret) | Complete — wired into ATO job, posts to X and Telegram after each signal |
