@@ -81,6 +81,7 @@ type StockMetrics struct {
 	CPR                float64
 	UpperWickRatio     float64
 	MA20Volume         float64
+	MA20Value          float64
 	VolumeRatio1D      float64
 	VolumeTrend3D      VolumeTrend
 	VPR                VPRLabel

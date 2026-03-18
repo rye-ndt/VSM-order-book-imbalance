@@ -17,7 +17,7 @@ func ComputeStockMetrics(symbol string, candles []input.OHLCV) (output.StockMetr
 	}
 	today := candles[0]
 	cpr := computeCPR(today)
-	ma20vol, volRatio, volTrend := computeVolumeMetrics(candles)
+	ma20vol, ma20val, volRatio, volTrend := computeVolumeMetrics(candles)
 
 	return output.StockMetrics{
 		Symbol:             symbol,
@@ -25,6 +25,7 @@ func ComputeStockMetrics(symbol string, candles []input.OHLCV) (output.StockMetr
 		CPR:                cpr,
 		UpperWickRatio:     computeUpperWickRatio(today),
 		MA20Volume:         ma20vol,
+		MA20Value:          ma20val,
 		VolumeRatio1D:      volRatio,
 		VolumeTrend3D:      volTrend,
 		VPR:                computeVPR(cpr, volRatio),
@@ -68,13 +69,15 @@ func computeUpperWickRatio(c input.OHLCV) float64 {
 	return (c.High - math.Max(c.Open, c.Close)) / r
 }
 
-func computeVolumeMetrics(candles []input.OHLCV) (ma20 float64, ratio float64, trend output.VolumeTrend) {
+func computeVolumeMetrics(candles []input.OHLCV) (ma20 float64, ma20val float64, ratio float64, trend output.VolumeTrend) {
 	n := min(20, len(candles))
-	var sum float64
+	var sumVol, sumVal float64
 	for i := range n {
-		sum += candles[i].Volume
+		sumVol += candles[i].Volume
+		sumVal += candles[i].Value
 	}
-	ma20 = sum / float64(n)
+	ma20 = sumVol / float64(n)
+	ma20val = sumVal / float64(n)
 	if ma20 > 0 {
 		ratio = candles[0].Volume / ma20
 	}
@@ -379,7 +382,8 @@ func ShouldMonitorToday(m output.StockMetrics) bool {
 		noBearish &&
 		m.VolumeRatio1D >= 1.2 &&
 		m.VPR != output.VPRDistribution &&
-		m.MomentumScore >= 1
+		m.MomentumScore >= 1 &&
+		m.MA20Value >= 5_000_000_000
 }
 
 func computeResistanceDist(candles []input.OHLCV, close float64) float64 {

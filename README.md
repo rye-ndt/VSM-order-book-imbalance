@@ -161,6 +161,7 @@ internal/
 | `signal_log` | Full event study snapshot per ATO signal fire |
 | `bot_subscribers` | Telegram chat IDs subscribed to signal broadcasts |
 | `daily_crawl_status` | Per-day flags: `market_data_crawled` (set after nightly pipeline) and `ato_monitored` (set at ATO session start) — prevents duplicate runs on cold-start |
+| `ato_session_log` | Append-only per-session event log: regime loaded, watchlist size, first quote per symbol, stability achieved, gate blocks, drop reasons, session summary. Indexed by `session_date`. Query after any session to trace exactly why each symbol did or did not produce a signal. |
 
 Schema migrations run automatically at startup via `Migrate()` using `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
@@ -181,24 +182,33 @@ The full nightly pipeline has been run end-to-end against the live SSI FastConne
 
 The cleaner correctly filters zero-volume rows (today's market was still open at fetch time) and drops symbols with fewer than 5 trading days in the window (newly listed / suspended).
 
-### Morning ATO monitor — connection-fixed, not yet live-tested
-`ATOMonitorJob` is fully implemented: watchlist loading, SSI IDS WebSocket subscription (SignalR negotiate → connect → `/start` handshake), 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. Cold-start protection is in place via `daily_crawl_status.ato_monitored` — a re-launched process will not re-run the session for the same trading day.
+Regime lag bug fixed: market regime is now computed from fresh VNIndex data and written to `market_regime` **before** stock metrics are scored — previously the regime computation happened after the metrics loop, meaning each session used the prior day's regime.
 
-It has not yet run during a live ATO session (09:00–09:15 ICT), so end-to-end signal firing has not been observed.
+### Morning ATO monitor — instrumented, not yet confirmed live
+`ATOMonitorJob` is fully implemented: watchlist loading, SSI IDS WebSocket subscription (SignalR negotiate → connect → `/start` handshake), 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. Cold-start protection is in place via `daily_crawl_status.ato_monitored`.
 
-`signal_log` is empty — no signals have fired yet.
+**Observability improvements (as of 2026-03-18):**
+- Per-symbol `sessionState` tracks quote count, first price received, first stability reached, and gate block reason across the full session
+- `dropNoPrice()` logs the specific reason each symbol was dropped at 09:07: 0 quotes (WebSocket issue), N quotes with EstMatchedPrice always 0 (ATO not formed or Trade messages absent), or had price then reverted
+- `logSessionSummary()` prints a per-symbol no-signal reason at session end
+- `SSIOrderBookClient` logs Trade message `EstMatchedPrice` on first receipt and on any change per symbol
+- Terminal order book visualization renders in ANSI (Binance-style) to stderr every 2 seconds: top 8 symbols by imbalance ratio, 5 ask/bid levels with volume bars
+- All key session events are persisted to `ato_session_log` (append-only DB table) so post-session analysis survives process crashes
+
+`signal_log` is empty — no confirmed end-to-end signal fires yet. Root cause under investigation: all 45 watchlist symbols were dropped at 09:07 on the first live session because `EstMatchedPrice` was 0 across all Trade messages. The new logging and `ato_session_log` table are in place to diagnose this tomorrow.
 
 ### Social posting (X / Twitter) — implemented, not yet configured
-`SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent. Intended for daily market status posts.
+`SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent.
 
 ### AI signal interpretation — implemented and wired
-`OpenAIClient` implements `Interpret`, `XInterpret`, and `TelegramInterpret`. Config accepts `openai.api_key` and `openai.model` (default `gpt-4o-mini`). Wired into `ATOMonitorJob`: after each signal fires, a goroutine calls `Interpret` within the configured `ai_timeout`, then posts the X text via `SocialPoster` and the Telegram paragraph via `Notifier`.
+`OpenAIClient` implements `Interpret`, `XInterpret`, and `TelegramInterpret`. Wired into `ATOMonitorJob`: after each signal fires, a goroutine calls `Interpret` within the configured `ai_timeout`, then posts to X via `SocialPoster` and to Telegram via `Notifier`.
 
 ### Multi-tenant Telegram bot — implemented
-`TelegramBot` replaces the single-recipient `TelegramNotifier`. It handles commands (`/start`, `/hello`, `/signal`, `/subscribe`, `/unsubscribe`) and broadcasts signal alerts to all subscribers stored in `bot_subscribers`. The `/signal` command returns today's fired signals with entry price, TP, and position size flag.
+`TelegramBot` handles commands (`/start`, `/hello`, `/signal`, `/subscribe`, `/unsubscribe`) and broadcasts signal alerts to all subscribers in `bot_subscribers`. The `/signal` command returns today's fired signals with entry price, TP, and position size flag.
 
 ### Pending
-- Observe a live ATO session to confirm signal firing and `signal_log` writes
+- Confirm `EstMatchedPrice` is non-zero in live Trade messages (root cause of zero signals)
+- Observe a confirmed signal fire and `signal_log` write during a live ATO session
 - Back-fill outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns) once T+2 prices are available
 - Add corporate events filter (ex-dividend / rights issue days)
 - Add foreign ownership room data

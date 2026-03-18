@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -165,6 +166,9 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 
 	metrics := make([]output.StockMetrics, 0, len(stockHistory))
 	for symbol, candles := range stockHistory {
+		if !isEquity(symbol) {
+			continue
+		}
 		if m, ok := calculator.ComputeStockMetrics(symbol, candles); ok {
 			m.ShouldMonitorToday = calculator.ShouldMonitorToday(m)
 			m.Regime = regime.Regime
@@ -202,4 +206,20 @@ func fetchFrom(
 
 func truncateDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func isEquity(symbol string) bool {
+	if strings.HasPrefix(symbol, "FUE") {
+		return false
+	}
+	n := len(symbol)
+	if n >= 7 && symbol[0] == 'C' {
+		for _, ch := range symbol[n-4:] {
+			if ch < '0' || ch > '9' {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }

@@ -90,9 +90,10 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 			PRIMARY KEY (symbol, trading_date)
 		);
 
-		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS should_monitor_today BOOLEAN NOT NULL DEFAULT FALSE;
-		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS final_score         SMALLINT NOT NULL DEFAULT 0;
-		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS position_size_flag  TEXT     NOT NULL DEFAULT 'Skip';
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS should_monitor_today BOOLEAN    NOT NULL DEFAULT FALSE;
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS final_score         SMALLINT   NOT NULL DEFAULT 0;
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS position_size_flag  TEXT       NOT NULL DEFAULT 'Skip';
+		ALTER TABLE stock_metrics ADD COLUMN IF NOT EXISTS ma20_value          NUMERIC(22,2) NOT NULL DEFAULT 0;
 
 		CREATE TABLE IF NOT EXISTS market_regime (
 			trading_date DATE        NOT NULL PRIMARY KEY,
@@ -272,7 +273,7 @@ func (s *PostgresMarketStore) UpsertStockMetrics(ctx context.Context, records []
 	if len(records) == 0 {
 		return nil
 	}
-	const cols = 15
+	const cols = 16
 	const batchSize = 500
 
 	for start := 0; start < len(records); start += batchSize {
@@ -286,13 +287,13 @@ func (s *PostgresMarketStore) UpsertStockMetrics(ctx context.Context, records []
 			date, _ := time.Parse(ssiStoreDateFormat, m.TradingDate)
 			b := i * cols
 			rows = append(rows, fmt.Sprintf(
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NOW())",
-				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15,
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NOW())",
+				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15, b+16,
 			))
 			args = append(args,
 				m.Symbol, date,
 				m.CPR, m.UpperWickRatio,
-				m.MA20Volume, m.VolumeRatio1D,
+				m.MA20Volume, m.MA20Value, m.VolumeRatio1D,
 				string(m.VolumeTrend3D), string(m.VPR),
 				m.MomentumScore, string(m.CandlePattern),
 				m.ResistanceDistance, m.Above20MA,
@@ -304,7 +305,7 @@ func (s *PostgresMarketStore) UpsertStockMetrics(ctx context.Context, records []
 			INSERT INTO stock_metrics (
 				symbol, trading_date,
 				cpr, upper_wick_ratio,
-				ma20_volume, volume_ratio_1d,
+				ma20_volume, ma20_value, volume_ratio_1d,
 				volume_trend_3d, vpr,
 				momentum_score, candle_pattern,
 				resistance_distance, above_20ma,
@@ -315,6 +316,7 @@ func (s *PostgresMarketStore) UpsertStockMetrics(ctx context.Context, records []
 				cpr                  = EXCLUDED.cpr,
 				upper_wick_ratio     = EXCLUDED.upper_wick_ratio,
 				ma20_volume          = EXCLUDED.ma20_volume,
+				ma20_value           = EXCLUDED.ma20_value,
 				volume_ratio_1d      = EXCLUDED.volume_ratio_1d,
 				volume_trend_3d      = EXCLUDED.volume_trend_3d,
 				vpr                  = EXCLUDED.vpr,
@@ -476,6 +478,8 @@ func (s *PostgresMarketStore) LoadWatchlist(ctx context.Context) ([]output.Watch
 		) mr ON true
 		WHERE sm.position_size_flag != 'Skip'
 		  AND sm.trading_date = (SELECT MAX(trading_date) FROM stock_metrics)
+		  AND sm.symbol !~ '^C[A-Z]+[0-9]{4}$'
+		  AND sm.symbol NOT LIKE 'FUE%'
 		ORDER BY sm.final_score DESC
 	`)
 	if err != nil {
