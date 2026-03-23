@@ -170,32 +170,33 @@ Schema migrations run automatically at startup via `Migrate()` using `CREATE TAB
 ## Current status
 
 ### Nightly pipeline — complete and verified
-The full nightly pipeline has been run end-to-end against the live SSI FastConnectData API:
+The full nightly pipeline runs at 03:30 ICT and has been live-verified end-to-end against the SSI FastConnectData API. Last manually verified snapshot (2026-03-16):
 
 | Table | Rows stored | Latest date |
 |---|---|---|
-| `stock_ohlcv` | 18,673 | 2026-03-16 |
-| `stock_foreign_flow` | 63,602 | 2026-03-16 |
-| `index_ohlcv` | 15 | 2026-03-16 |
-| `stock_metrics` | 1,437 | 2026-03-16 |
-| `market_regime` | 1 | 2026-03-16 (Bear) |
+| `stock_ohlcv` | 18,673+ | 2026-03-16 (pipeline continues nightly) |
+| `stock_foreign_flow` | 63,602+ | 2026-03-16 (pipeline continues nightly) |
+| `index_ohlcv` | 15+ | 2026-03-16 (pipeline continues nightly) |
+| `stock_metrics` | 1,437+ | 2026-03-16 (pipeline continues nightly) |
+| `market_regime` | 1 row per day | Bear as of last check |
 
 The cleaner correctly filters zero-volume rows (today's market was still open at fetch time) and drops symbols with fewer than 5 trading days in the window (newly listed / suspended).
 
 Regime lag bug fixed: market regime is now computed from fresh VNIndex data and written to `market_regime` **before** stock metrics are scored — previously the regime computation happened after the metrics loop, meaning each session used the prior day's regime.
 
-### Morning ATO monitor — instrumented, not yet confirmed live
+### Morning ATO monitor — instrumented, EstMatchedPrice investigation ongoing
 `ATOMonitorJob` is fully implemented: watchlist loading, SSI IDS WebSocket subscription (SignalR negotiate → connect → `/start` handshake), 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. Cold-start protection is in place via `daily_crawl_status.ato_monitored`.
 
-**Observability improvements (as of 2026-03-18):**
+**Observability (accumulated through 2026-03-23):**
 - Per-symbol `sessionState` tracks quote count, first price received, first stability reached, and gate block reason across the full session
 - `dropNoPrice()` logs the specific reason each symbol was dropped at 09:07: 0 quotes (WebSocket issue), N quotes with EstMatchedPrice always 0 (ATO not formed or Trade messages absent), or had price then reverted
 - `logSessionSummary()` prints a per-symbol no-signal reason at session end
-- `SSIOrderBookClient` logs Trade message `EstMatchedPrice` on first receipt and on any change per symbol
+- `readLoop` tracks total and broadcast frame counts; logs the first raw frame received; logs any non-broadcast hub frames by H/M fields — makes it possible to confirm whether data is flowing at all before the quote-parsing layer
+- `/start` HTTP response body is logged to confirm the SignalR handshake succeeded
 - Terminal order book visualization renders in ANSI (Binance-style) to stderr every 2 seconds: top 8 symbols by imbalance ratio, 5 ask/bid levels with volume bars
 - All key session events are persisted to `ato_session_log` (append-only DB table) so post-session analysis survives process crashes
 
-`signal_log` is empty — no confirmed end-to-end signal fires yet. Root cause under investigation: all 45 watchlist symbols were dropped at 09:07 on the first live session because `EstMatchedPrice` was 0 across all Trade messages. The new logging and `ato_session_log` table are in place to diagnose this tomorrow.
+`signal_log` is empty — no confirmed end-to-end signal fires yet. On the first live session all 45 watchlist symbols were dropped at 09:07 because `EstMatchedPrice` was 0 in all messages. The frame-level WebSocket diagnostics now in place are intended to isolate whether the issue is at the connection layer (no frames arriving), the SignalR framing layer (frames arrive but no broadcast messages), or the data layer (broadcast messages arrive but EstMatchedPrice field is zero).
 
 ### Social posting (X / Twitter) — implemented, not yet configured
 `SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent.

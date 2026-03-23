@@ -55,8 +55,8 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 |---|---|
 | Nightly data pipeline | Complete and live-verified |
 | Metrics computation (10 factors) | Complete — regime lag bug fixed 2026-03-17 |
-| ATO monitor (signal gate) | Live-tested. Watchlist loaded, WS connected, session runs — but all symbols dropped at 09:07 (EstMatchedPrice=0). Under investigation. |
-| ATO session observability | Complete — per-symbol diagnostics, `ato_session_log` DB table, terminal OB visualization, drop reason logging |
+| ATO monitor (signal gate) | Live-tested. Watchlist loaded, WS connected, session runs — but all symbols dropped at 09:07 (EstMatchedPrice=0). Frame-level WebSocket diagnostics now in place to isolate whether the failure is at connection, SignalR framing, or data layer. |
+| ATO session observability | Complete — per-symbol diagnostics, `ato_session_log` DB table, terminal OB visualization, drop reason logging, frame-count tracking, first-frame logging, non-broadcast hub frame logging |
 | Multi-tenant Telegram bot (subscribe/unsubscribe, /signal command) | Complete |
 | signal_log (event study) | Schema live, 0 rows — no confirmed signal fires yet |
 | AI signal interpretation (Interpret, XInterpret, TelegramInterpret) | Complete — wired into ATO job |
@@ -64,7 +64,7 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 | Foreign ownership room | 0% |
 | Subscription/payment | 0% |
 
-**Live data as of 2026-03-18:** 18,673+ OHLCV rows, 63,602+ foreign flow rows, 1,437+ stock_metrics rows, regime = Bear.
+**Live data:** 18,673+ OHLCV rows, 63,602+ foreign flow rows, 1,437+ stock_metrics rows (last manually verified 2026-03-16; nightly pipeline has continued running). Regime = Bear.
 
 ---
 
@@ -161,7 +161,7 @@ SSI FastConnectData terms likely prohibit redistribution of real-time data. Viet
 - Consult a Vietnamese securities lawyer before public launch
 
 ### Technical
-- ATO monitor ran live but no signals fired — `EstMatchedPrice=0` in all Trade messages. Either ATO pricing was not formed that day, Trade messages are not arriving, or the field mapping is wrong. New `ato_session_log` table and per-symbol diagnostic logging are in place to pinpoint the cause next session.
+- ATO monitor ran live but no signals fired — `EstMatchedPrice=0` in all messages. Frame-level WebSocket diagnostics (frame count tracking, first-frame logging, non-broadcast hub frame logging, `/start` response body logging) are now in place to isolate the failure layer: connection, SignalR framing, or data content.
 - WebSocket reconnection during the 09:00–09:15 window is critical; a dropped connection means missed signals
 - Signal quality degrades in Bear regime — more false positives expected; communicate this to subscribers
 
@@ -177,8 +177,8 @@ SSI FastConnectData terms likely prohibit redistribution of real-time data. Viet
 |---|---|
 | ~~1–2~~ | ~~Build multi-tenant Telegram bot.~~ ✓ Done |
 | ~~2–3~~ | ~~Wire AI interpretation into ATO job.~~ ✓ Done |
-| ~~3–4~~ | ~~Add full ATO session observability (ato_session_log, drop diagnostics, terminal OB view, regime lag fix).~~ ✓ Done |
-| 1–2 | Confirm EstMatchedPrice non-zero in live session. Observe confirmed signal fires. Fix any remaining issues. |
+| ~~3–4~~ | ~~Add full ATO session observability (ato_session_log, drop diagnostics, terminal OB view, regime lag fix, frame-level WS diagnostics).~~ ✓ Done |
+| **Now** | Confirm EstMatchedPrice non-zero in live session using new frame-level diagnostics. Observe confirmed signal fires. Fix any remaining issues. |
 | 3 | Add corporate events filter. |
 | 4 | Launch free Tier 1 (X bot + Telegram channel). Start publishing signal outcomes publicly. |
 | 5–8 | Accumulate track record (30+ signals with D0/D1/D2 outcomes). Build audience. |

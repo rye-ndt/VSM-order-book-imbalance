@@ -272,7 +272,9 @@ func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) er
 		conn.Close()
 		return fmt.Errorf("ssi ob: /start: %w", err)
 	}
+	startBody, _ := io.ReadAll(startResp.Body)
 	startResp.Body.Close()
+	log.Printf("[ssi-ob] /start HTTP %d: %s", startResp.StatusCode, startBody)
 	if startResp.StatusCode != 200 {
 		conn.Close()
 		return fmt.Errorf("ssi ob: /start returned HTTP %d", startResp.StatusCode)
@@ -307,14 +309,21 @@ func (c *SSIOrderBookClient) readLoop(ctx context.Context, conn *websocket.Conn)
 		)
 	}()
 
+	totalFrames := 0
+	broadcastFrames := 0
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
+				log.Printf("[ssi-ob] readLoop done — frames: %d total, %d broadcast", totalFrames, broadcastFrames)
 				return
 			}
-			log.Printf("[ssi-ob] WARN connection lost — no more quotes will be received this session: %v", err)
+			log.Printf("[ssi-ob] WARN connection lost after %d frames (%d broadcast) — no more quotes will be received this session: %v", totalFrames, broadcastFrames, err)
 			return
+		}
+		totalFrames++
+		if totalFrames == 1 {
+			log.Printf("[ssi-ob] first frame received: %s", raw)
 		}
 
 		var outer ssiSignalRMessage
@@ -325,8 +334,12 @@ func (c *SSIOrderBookClient) readLoop(ctx context.Context, conn *websocket.Conn)
 
 		for _, msg := range outer.M {
 			if !strings.EqualFold(msg.H, signalRHub) || !strings.EqualFold(msg.M, signalRBroadcast) || len(msg.A) == 0 {
+				if msg.H != "" || msg.M != "" {
+					log.Printf("[ssi-ob] non-broadcast hub frame: H=%q M=%q", msg.H, msg.M)
+				}
 				continue
 			}
+			broadcastFrames++
 			// A[0] is a JSON-encoded string containing the envelope JSON.
 			var payloadStr string
 			if err := json.Unmarshal(msg.A[0], &payloadStr); err != nil {
