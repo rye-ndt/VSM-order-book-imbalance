@@ -67,6 +67,86 @@ func (j *MarketDataJob) Run() {
 	if err := j.store.MarkMarketDataCrawled(ctx, today); err != nil {
 		log.Printf("[job] mark market data crawled: %v", err)
 	}
+
+	j.runAudit(ctx, today)
+}
+
+func (j *MarketDataJob) runAudit(ctx context.Context, today time.Time) {
+	warn := func(format string, args ...any) {
+		log.Printf("[audit] WARN "+format, args...)
+	}
+	info := func(format string, args ...any) {
+		log.Printf("[audit] "+format, args...)
+	}
+
+	const stalenessThreshold = 5 * 24 * time.Hour
+
+	stockDate, stockOk, err := j.store.LatestStockOHLCVDate(ctx)
+	if err != nil {
+		warn("latest stock_ohlcv date: %v", err)
+	} else if !stockOk {
+		warn("stock_ohlcv is empty")
+	} else {
+		age := today.Sub(truncateDay(stockDate))
+		info("stock_ohlcv latest=%s (%.0f days ago)", stockDate.Format(dateLayout), age.Hours()/24)
+		if age > stalenessThreshold {
+			warn("stock_ohlcv is stale — latest=%s, today=%s", stockDate.Format(dateLayout), today.Format(dateLayout))
+		}
+	}
+
+	indexDate, indexOk, err := j.store.LatestIndexOHLCVDate(ctx, vnIndexSymbol)
+	if err != nil {
+		warn("latest index_ohlcv date: %v", err)
+	} else if !indexOk {
+		warn("index_ohlcv is empty")
+	} else {
+		age := today.Sub(truncateDay(indexDate))
+		info("index_ohlcv latest=%s (%.0f days ago)", indexDate.Format(dateLayout), age.Hours()/24)
+		if age > stalenessThreshold {
+			warn("index_ohlcv is stale — latest=%s", indexDate.Format(dateLayout))
+		}
+		if stockOk && !truncateDay(indexDate).Equal(truncateDay(stockDate)) {
+			warn("index_ohlcv date (%s) != stock_ohlcv date (%s) — regime will be computed from older index data",
+				indexDate.Format(dateLayout), stockDate.Format(dateLayout))
+		}
+	}
+
+	regime, hasRegime, err := j.store.LoadLatestMarketRegime(ctx)
+	if err != nil {
+		warn("load market regime: %v", err)
+	} else if !hasRegime {
+		warn("market_regime is empty")
+	} else {
+		info("market_regime=%s on %s", regime.Regime, regime.TradingDate)
+		if indexOk {
+			regimeDate, _ := time.Parse("02/01/2006", regime.TradingDate)
+			if !truncateDay(regimeDate).Equal(truncateDay(indexDate)) {
+				warn("market_regime date (%s) != index_ohlcv date (%s) — regime is stale",
+					regime.TradingDate, indexDate.Format(dateLayout))
+			}
+		}
+	}
+
+	watchlist, err := j.store.LoadWatchlist(ctx)
+	if err != nil {
+		warn("load watchlist: %v", err)
+	} else {
+		full, half := 0, 0
+		for _, e := range watchlist {
+			switch e.PositionSizeFlag {
+			case "Full":
+				full++
+			case "Half":
+				half++
+			}
+		}
+		info("watchlist: %d total (%d Full, %d Half)", len(watchlist), full, half)
+		if len(watchlist) == 0 {
+			warn("watchlist is empty — no stocks will be monitored tomorrow")
+		} else if len(watchlist) < 5 {
+			warn("watchlist has only %d stocks — unusually small", len(watchlist))
+		}
+	}
 }
 
 func (j *MarketDataJob) syncStockOHLCV(ctx context.Context, yesterday, firstRunFrom, today time.Time) {

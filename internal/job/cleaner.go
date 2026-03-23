@@ -40,20 +40,24 @@ func CleanOHLCV(records []input.OHLCV) []input.OHLCV {
 		valid = append(valid, r)
 	}
 
+	allDates := make(map[string]struct{})
 	tradingDays := make(map[string]map[string]struct{}, len(valid))
 	for _, r := range valid {
+		allDates[r.TradingDate] = struct{}{}
 		if tradingDays[r.Symbol] == nil {
 			tradingDays[r.Symbol] = make(map[string]struct{})
 		}
 		tradingDays[r.Symbol][r.TradingDate] = struct{}{}
 	}
 
+	threshold := min(minTradingDays, len(allDates))
+
 	excludeReasons := make(map[string]string)
 	for sym, days := range tradingDays {
-		if len(days) < minTradingDays {
+		if len(days) < threshold {
 			excludeReasons[sym] = fmt.Sprintf(
 				"%d trading day(s) in window (min %d) — possibly newly listed, suspended, or delisted",
-				len(days), minTradingDays,
+				len(days), threshold,
 			)
 		}
 	}

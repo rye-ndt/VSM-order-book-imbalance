@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,16 +20,19 @@ import (
 )
 
 const (
-	// ssiIDSMarketDataChannel is the subscription prefix for market data
-	// (spec section 3.2). One X subscription delivers both Trade and Quote
-	// messages; DataType in the envelope tells them apart.
 	ssiIDSMarketDataChannel = "X"
-
+	ssiIDSDataTypeX     = "X"
 	ssiIDSDataTypeQuote = "Quote"
 	ssiIDSDataTypeTrade = "Trade"
+
+	signalRHub            = "FcMarketDataV2Hub"
+	signalRHubLower       = "fcmarketdatav2hub"
+	signalRClientProtocol = "1.5"
+	signalRSwitchChannels = "SwitchChannels"
+	signalRBroadcast      = "broadcast"
 )
 
-// ssiIDSEnvelope is the outer wrapper of every IDS message.
+// ssiIDSEnvelope is the Broadcast payload delivered by FcMarketDataV2Hub.
 // DataType identifies the message kind; Content is a JSON-encoded string
 // that must be decoded a second time to obtain the actual payload.
 // Go's json decoder matches field names case-insensitively, so this struct
@@ -40,72 +42,77 @@ type ssiIDSEnvelope struct {
 	Content  string `json:"Content"`
 }
 
-// ssiIDSSubRequest is sent to the IDS server to subscribe to a data channel.
-// Params follows the SSI convention: "<channel>:<sym1>,<sym2>".
-// The exact wire format (JSON vs plain text) must be confirmed against the spec.
-type ssiIDSSubRequest struct {
-	Action string `json:"action"` // "sub"
-	Params string `json:"params"`
+// ssiSignalRMessage is the outer SignalR WebSocket frame.
+type ssiSignalRMessage struct {
+	M []ssiSignalRHubMessage `json:"M"`
 }
 
-// ssiIDSQuote is the payload inside a Quote envelope (spec section 3.2).
-// Prices arrive as float64; volumes arrive as quoted strings.
+type ssiSignalRHubMessage struct {
+	H string            `json:"H"`
+	M string            `json:"M"`
+	A []json.RawMessage `json:"A"`
+}
+
+// ssiSignalRInvoke is a SignalR hub method invocation sent by the client.
+type ssiSignalRInvoke struct {
+	H string   `json:"H"`
+	M string   `json:"M"`
+	A []string `json:"A"`
+	I int      `json:"I"`
+}
+
+// ssiIDSQuote is the unified X-type market data message from FcMarketDataV2Hub.
+// All price and volume fields are float64 on the wire.
 type ssiIDSQuote struct {
-	Symbol      string `json:"Symbol"`
-	Exchange    string `json:"Exchange"`
-	TradingDate string `json:"TradingDate"` // DD/MM/YYYY
-	TradingTime string `json:"TradingTime"` // HH:MM:SS
-
-	BidPrice1  float64 `json:"BidPrice1"`
-	BidVol1    string  `json:"BidVol1"`
-	BidPrice2  float64 `json:"BidPrice2"`
-	BidVol2    string  `json:"BidVol2"`
-	BidPrice3  float64 `json:"BidPrice3"`
-	BidVol3    string  `json:"BidVol3"`
-	BidPrice4  float64 `json:"BidPrice4"`
-	BidVol4    string  `json:"BidVol4"`
-	BidPrice5  float64 `json:"BidPrice5"`
-	BidVol5    string  `json:"BidVol5"`
-	BidPrice6  float64 `json:"BidPrice6"`
-	BidVol6    string  `json:"BidVol6"`
-	BidPrice7  float64 `json:"BidPrice7"`
-	BidVol7    string  `json:"BidVol7"`
-	BidPrice8  float64 `json:"BidPrice8"`
-	BidVol8    string  `json:"BidVol8"`
-	BidPrice9  float64 `json:"BidPrice9"`
-	BidVol9    string  `json:"BidVol9"`
-	BidPrice10 float64 `json:"BidPrice10"`
-	BidVol10   string  `json:"BidVol10"`
-
-	AskPrice1  float64 `json:"AskPrice1"`
-	AskVol1    string  `json:"AskVol1"`
-	AskPrice2  float64 `json:"AskPrice2"`
-	AskVol2    string  `json:"AskVol2"`
-	AskPrice3  float64 `json:"AskPrice3"`
-	AskVol3    string  `json:"AskVol3"`
-	AskPrice4  float64 `json:"AskPrice4"`
-	AskVol4    string  `json:"AskVol4"`
-	AskPrice5  float64 `json:"AskPrice5"`
-	AskVol5    string  `json:"AskVol5"`
-	AskPrice6  float64 `json:"AskPrice6"`
-	AskVol6    string  `json:"AskVol6"`
-	AskPrice7  float64 `json:"AskPrice7"`
-	AskVol7    string  `json:"AskVol7"`
-	AskPrice8  float64 `json:"AskPrice8"`
-	AskVol8    string  `json:"AskVol8"`
-	AskPrice9  float64 `json:"AskPrice9"`
-	AskVol9    string  `json:"AskVol9"`
-	AskPrice10 float64 `json:"AskPrice10"`
-	AskVol10   string  `json:"AskVol10"`
-}
-
-// ssiIDSTrade carries the price metadata fields from a Trade envelope
-// (spec section 3.2). All three fields are Number type in the spec.
-type ssiIDSTrade struct {
 	Symbol          string  `json:"Symbol"`
+	Exchange        string  `json:"Exchange"`
+	TradingDate     string  `json:"TradingDate"`
+	TradingTime     string  `json:"Time"`
 	Ceiling         float64 `json:"Ceiling"`
 	RefPrice        float64 `json:"RefPrice"`
 	EstMatchedPrice float64 `json:"EstMatchedPrice"`
+
+	BidPrice1  float64 `json:"BidPrice1"`
+	BidVol1    float64 `json:"BidVol1"`
+	BidPrice2  float64 `json:"BidPrice2"`
+	BidVol2    float64 `json:"BidVol2"`
+	BidPrice3  float64 `json:"BidPrice3"`
+	BidVol3    float64 `json:"BidVol3"`
+	BidPrice4  float64 `json:"BidPrice4"`
+	BidVol4    float64 `json:"BidVol4"`
+	BidPrice5  float64 `json:"BidPrice5"`
+	BidVol5    float64 `json:"BidVol5"`
+	BidPrice6  float64 `json:"BidPrice6"`
+	BidVol6    float64 `json:"BidVol6"`
+	BidPrice7  float64 `json:"BidPrice7"`
+	BidVol7    float64 `json:"BidVol7"`
+	BidPrice8  float64 `json:"BidPrice8"`
+	BidVol8    float64 `json:"BidVol8"`
+	BidPrice9  float64 `json:"BidPrice9"`
+	BidVol9    float64 `json:"BidVol9"`
+	BidPrice10 float64 `json:"BidPrice10"`
+	BidVol10   float64 `json:"BidVol10"`
+
+	AskPrice1  float64 `json:"AskPrice1"`
+	AskVol1    float64 `json:"AskVol1"`
+	AskPrice2  float64 `json:"AskPrice2"`
+	AskVol2    float64 `json:"AskVol2"`
+	AskPrice3  float64 `json:"AskPrice3"`
+	AskVol3    float64 `json:"AskVol3"`
+	AskPrice4  float64 `json:"AskPrice4"`
+	AskVol4    float64 `json:"AskVol4"`
+	AskPrice5  float64 `json:"AskPrice5"`
+	AskVol5    float64 `json:"AskVol5"`
+	AskPrice6  float64 `json:"AskPrice6"`
+	AskVol6    float64 `json:"AskVol6"`
+	AskPrice7  float64 `json:"AskPrice7"`
+	AskVol7    float64 `json:"AskVol7"`
+	AskPrice8  float64 `json:"AskPrice8"`
+	AskVol8    float64 `json:"AskVol8"`
+	AskPrice9  float64 `json:"AskPrice9"`
+	AskVol9    float64 `json:"AskVol9"`
+	AskPrice10 float64 `json:"AskPrice10"`
+	AskVol10   float64 `json:"AskVol10"`
 }
 
 // SSIOrderBookClient implements input.OrderBookClient via the SSI IDS WebSocket.
@@ -120,25 +127,15 @@ type SSIOrderBookClient struct {
 	cachedToken string
 	tokenExpiry time.Time
 
-	// per-symbol price metadata from Trade messages (all guarded by priceMu)
-	priceMu             sync.RWMutex
-	lastEstMatchedPrice map[string]float64
-	lastCeilingPrice    map[string]float64
-	lastRefPrice        map[string]float64
-
-	// per-symbol latest order book snapshot (Quote + merged IndicatedPrice)
 	snapMu sync.RWMutex
 	cache  map[string]input.OrderBookSnapshot
 }
 
 func NewSSIOrderBookClient(cfg config.SSIConfig) input.OrderBookClient {
 	return &SSIOrderBookClient{
-		cfg:                 cfg,
-		httpClient:          &http.Client{Timeout: 30 * time.Second},
-		lastEstMatchedPrice: make(map[string]float64),
-		lastCeilingPrice:    make(map[string]float64),
-		lastRefPrice:        make(map[string]float64),
-		cache:               make(map[string]input.OrderBookSnapshot),
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		cache:      make(map[string]input.OrderBookSnapshot),
 	}
 }
 
@@ -205,8 +202,12 @@ type ssiSignalRNegotiateResponse struct {
 }
 
 func (c *SSIOrderBookClient) signalRNegotiate(ctx context.Context, token string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.cfg.StreamURL+"/negotiate", nil)
+	params := url.Values{
+		"clientProtocol": {signalRClientProtocol},
+		"connectionData": {`[{"name":"` + signalRHubLower + `"}]`},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.cfg.StreamURL+"/negotiate?"+params.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("ssi ob negotiate: build request: %w", err)
 	}
@@ -245,10 +246,11 @@ func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) er
 	}
 
 	encodedToken := url.QueryEscape(connToken)
+	encodedConnData := url.QueryEscape(`[{"name":"` + signalRHubLower + `"}]`)
 
-	// stream_url is https://...; replace scheme for WebSocket dial.
 	wsBase := strings.NewReplacer("https://", "wss://", "http://", "ws://").Replace(c.cfg.StreamURL)
-	wsURL := wsBase + "/connect?transport=webSockets&clientProtocol=1.2&connectionToken=" + encodedToken
+	wsURL := wsBase + "/connect?transport=webSockets&clientProtocol=" + signalRClientProtocol +
+		"&connectionToken=" + encodedToken + "&connectionData=" + encodedConnData
 
 	hdr := http.Header{"Authorization": {"Bearer " + token}}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
@@ -258,7 +260,8 @@ func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) er
 	}
 
 	startReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.cfg.StreamURL+"/start?transport=webSockets&clientProtocol=1.2&connectionToken="+encodedToken, nil)
+		c.cfg.StreamURL+"/start?transport=webSockets&clientProtocol="+signalRClientProtocol+
+			"&connectionToken="+encodedToken+"&connectionData="+encodedConnData, nil)
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("ssi ob: build /start request: %w", err)
@@ -275,13 +278,15 @@ func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) er
 		return fmt.Errorf("ssi ob: /start returned HTTP %d", startResp.StatusCode)
 	}
 
-	subMsg := ssiIDSSubRequest{
-		Action: "sub",
-		Params: ssiIDSMarketDataChannel + ":" + strings.Join(symbols, ","),
+	invoke := ssiSignalRInvoke{
+		H: signalRHub,
+		M: signalRSwitchChannels,
+		A: []string{ssiIDSMarketDataChannel + ":ALL"},
+		I: 1,
 	}
-	if err := conn.WriteJSON(subMsg); err != nil {
+	if err := conn.WriteJSON(invoke); err != nil {
 		conn.Close()
-		return fmt.Errorf("ssi ob: send subscribe: %w", err)
+		return fmt.Errorf("ssi ob: send SwitchChannels: %w", err)
 	}
 
 	log.Printf("[ssi-ob] subscribed to %d symbols", len(symbols))
@@ -308,44 +313,38 @@ func (c *SSIOrderBookClient) readLoop(ctx context.Context, conn *websocket.Conn)
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[ssi-ob] read error: %v", err)
+			log.Printf("[ssi-ob] WARN connection lost — no more quotes will be received this session: %v", err)
 			return
 		}
 
-		var env ssiIDSEnvelope
-		if err := json.Unmarshal(raw, &env); err != nil {
-			log.Printf("[ssi-ob] parse envelope: %v", err)
+		var outer ssiSignalRMessage
+		if err := json.Unmarshal(raw, &outer); err != nil {
+			log.Printf("[ssi-ob] parse signalr frame: %v", err)
 			continue
 		}
 
-		switch env.DataType {
-		case ssiIDSDataTypeTrade:
-			c.handleTrade(env.Content)
-		case ssiIDSDataTypeQuote:
-			c.handleQuote(env.Content)
+		for _, msg := range outer.M {
+			if !strings.EqualFold(msg.H, signalRHub) || !strings.EqualFold(msg.M, signalRBroadcast) || len(msg.A) == 0 {
+				continue
+			}
+			// A[0] is a JSON-encoded string containing the envelope JSON.
+			var payloadStr string
+			if err := json.Unmarshal(msg.A[0], &payloadStr); err != nil {
+				log.Printf("[ssi-ob] parse broadcast string: %v", err)
+				continue
+			}
+			var env ssiIDSEnvelope
+			if err := json.Unmarshal([]byte(payloadStr), &env); err != nil {
+				log.Printf("[ssi-ob] parse broadcast envelope: %v", err)
+				continue
+			}
+			switch env.DataType {
+			case ssiIDSDataTypeX, ssiIDSDataTypeQuote, ssiIDSDataTypeTrade:
+				c.handleQuote(env.Content)
+			default:
+				log.Printf("[ssi-ob] unhandled DataType %q", env.DataType)
+			}
 		}
-	}
-}
-
-func (c *SSIOrderBookClient) handleTrade(content string) {
-	var t ssiIDSTrade
-	if err := json.Unmarshal([]byte(content), &t); err != nil {
-		log.Printf("[ssi-ob] parse trade: %v", err)
-		return
-	}
-	if t.Symbol == "" {
-		return
-	}
-	c.priceMu.Lock()
-	prev, seen := c.lastEstMatchedPrice[t.Symbol]
-	changed := !seen || prev != t.EstMatchedPrice
-	c.lastEstMatchedPrice[t.Symbol] = t.EstMatchedPrice
-	c.lastCeilingPrice[t.Symbol] = t.Ceiling
-	c.lastRefPrice[t.Symbol] = t.RefPrice
-	c.priceMu.Unlock()
-	if changed {
-		log.Printf("[ssi-ob] trade %s  est=%.0f  ceil=%.0f  ref=%.0f",
-			t.Symbol, t.EstMatchedPrice, t.Ceiling, t.RefPrice)
 	}
 }
 
@@ -359,13 +358,7 @@ func (c *SSIOrderBookClient) handleQuote(content string) {
 		return
 	}
 
-	c.priceMu.RLock()
-	indicatedPrice := c.lastEstMatchedPrice[q.Symbol]
-	ceilingPrice := c.lastCeilingPrice[q.Symbol]
-	refPrice := c.lastRefPrice[q.Symbol]
-	c.priceMu.RUnlock()
-
-	snap := quoteToSnapshot(q, indicatedPrice, ceilingPrice, refPrice)
+	snap := quoteToSnapshot(q)
 
 	c.snapMu.Lock()
 	c.cache[q.Symbol] = snap
@@ -390,30 +383,30 @@ func (c *SSIOrderBookClient) FetchOrderBook(symbol string) (input.OrderBookSnaps
 // Conversion
 // -------------------------------------------------------------------------
 
-func quoteToSnapshot(q ssiIDSQuote, indicatedPrice, ceilingPrice, refPrice float64) input.OrderBookSnapshot {
+func quoteToSnapshot(q ssiIDSQuote) input.OrderBookSnapshot {
 	rawBids := [10][2]float64{
-		{q.BidPrice1, parseIDSVol(q.BidVol1)},
-		{q.BidPrice2, parseIDSVol(q.BidVol2)},
-		{q.BidPrice3, parseIDSVol(q.BidVol3)},
-		{q.BidPrice4, parseIDSVol(q.BidVol4)},
-		{q.BidPrice5, parseIDSVol(q.BidVol5)},
-		{q.BidPrice6, parseIDSVol(q.BidVol6)},
-		{q.BidPrice7, parseIDSVol(q.BidVol7)},
-		{q.BidPrice8, parseIDSVol(q.BidVol8)},
-		{q.BidPrice9, parseIDSVol(q.BidVol9)},
-		{q.BidPrice10, parseIDSVol(q.BidVol10)},
+		{q.BidPrice1, q.BidVol1},
+		{q.BidPrice2, q.BidVol2},
+		{q.BidPrice3, q.BidVol3},
+		{q.BidPrice4, q.BidVol4},
+		{q.BidPrice5, q.BidVol5},
+		{q.BidPrice6, q.BidVol6},
+		{q.BidPrice7, q.BidVol7},
+		{q.BidPrice8, q.BidVol8},
+		{q.BidPrice9, q.BidVol9},
+		{q.BidPrice10, q.BidVol10},
 	}
 	rawAsks := [10][2]float64{
-		{q.AskPrice1, parseIDSVol(q.AskVol1)},
-		{q.AskPrice2, parseIDSVol(q.AskVol2)},
-		{q.AskPrice3, parseIDSVol(q.AskVol3)},
-		{q.AskPrice4, parseIDSVol(q.AskVol4)},
-		{q.AskPrice5, parseIDSVol(q.AskVol5)},
-		{q.AskPrice6, parseIDSVol(q.AskVol6)},
-		{q.AskPrice7, parseIDSVol(q.AskVol7)},
-		{q.AskPrice8, parseIDSVol(q.AskVol8)},
-		{q.AskPrice9, parseIDSVol(q.AskVol9)},
-		{q.AskPrice10, parseIDSVol(q.AskVol10)},
+		{q.AskPrice1, q.AskVol1},
+		{q.AskPrice2, q.AskVol2},
+		{q.AskPrice3, q.AskVol3},
+		{q.AskPrice4, q.AskVol4},
+		{q.AskPrice5, q.AskVol5},
+		{q.AskPrice6, q.AskVol6},
+		{q.AskPrice7, q.AskVol7},
+		{q.AskPrice8, q.AskVol8},
+		{q.AskPrice9, q.AskVol9},
+		{q.AskPrice10, q.AskVol10},
 	}
 
 	bids := make([]input.PriceLevel, 0, 10)
@@ -434,15 +427,8 @@ func quoteToSnapshot(q ssiIDSQuote, indicatedPrice, ceilingPrice, refPrice float
 		CapturedAt:     time.Now(),
 		BidLevels:      bids,
 		AskLevels:      asks,
-		IndicatedPrice: indicatedPrice,
-		CeilingPrice:   ceilingPrice,
-		RefPrice:       refPrice,
+		IndicatedPrice: q.EstMatchedPrice,
+		CeilingPrice:   q.Ceiling,
+		RefPrice:       q.RefPrice,
 	}
-}
-
-// parseIDSVol parses a volume string from the IDS Quote payload.
-// Volumes arrive as quoted strings (e.g. "150") per spec section 3.2.
-func parseIDSVol(s string) float64 {
-	v, _ := strconv.ParseFloat(strings.ReplaceAll(s, ",", ""), 64)
-	return v
 }
