@@ -74,20 +74,28 @@ func (sl *sessionLogger) write(level, symbol, event, msg string) {
 }
 
 type sessionState struct {
-	quoteCount map[string]int
-	hadPrice   map[string]bool
-	seenQuote  map[string]bool
-	seenStable map[string]bool
-	gateReason map[string]string
+	quoteCount     map[string]int
+	hadPrice       map[string]bool
+	seenQuote      map[string]bool
+	seenStable     map[string]bool
+	gateReason     map[string]string
+	peakRatio      map[string]float64
+	lastPrice      map[string]float64
+	lastRefPrice   map[string]float64
+	dropReason     map[string]string
 }
 
 func newSessionState(n int) *sessionState {
 	return &sessionState{
-		quoteCount: make(map[string]int, n),
-		hadPrice:   make(map[string]bool, n),
-		seenQuote:  make(map[string]bool, n),
-		seenStable: make(map[string]bool, n),
-		gateReason: make(map[string]string, n),
+		quoteCount:   make(map[string]int, n),
+		hadPrice:     make(map[string]bool, n),
+		seenQuote:    make(map[string]bool, n),
+		seenStable:   make(map[string]bool, n),
+		gateReason:   make(map[string]string, n),
+		peakRatio:    make(map[string]float64, n),
+		lastPrice:    make(map[string]float64, n),
+		lastRefPrice: make(map[string]float64, n),
+		dropReason:   make(map[string]string, n),
 	}
 }
 
@@ -204,15 +212,22 @@ func (j *ATOMonitorJob) Run() {
 
 	ss := newSessionState(len(active))
 	fired := make(map[string]bool, len(active))
+	warnFired := make(map[string]bool, len(active))
+	warnCount := make(map[string]int, len(active))
 	dropped := false
 	signalsStopped := false
 	ticker := time.NewTicker(j.ato.PollInterval)
 	defer ticker.Stop()
 
+	sessionDate := today
+
 	for {
 		select {
 		case <-ctx.Done():
 			logSessionSummary(fired, active, ss, sl)
+			if j.ai != nil && j.notifier != nil {
+				go j.postSessionSummary(context.Background(), watchlist, string(regimeLabel), scoreThreshold, sessionDate, fired, active, ss)
+			}
 			return
 		case t := <-ticker.C:
 			if !dropped && t.After(dropAt) {
@@ -221,6 +236,10 @@ func (j *ATOMonitorJob) Run() {
 			}
 			if len(active) == 0 {
 				sl.warn("", "all_dropped", "all symbols dropped, exiting early")
+				logSessionSummary(fired, active, ss, sl)
+				if j.ai != nil && j.notifier != nil {
+					go j.postSessionSummary(context.Background(), watchlist, string(regimeLabel), scoreThreshold, sessionDate, fired, active, ss)
+				}
 				return
 			}
 			if !signalsStopped && t.After(signalStopAt) {
@@ -230,7 +249,7 @@ func (j *ATOMonitorJob) Run() {
 					j.ato.SignalStopHour, j.ato.SignalStopMinute)
 			}
 			views := make(map[string]liveView)
-			for _, c := range j.poll(active, windows, entries, fired, scoreThreshold, signalsStopped, views, ss, sl) {
+			for _, c := range j.poll(active, windows, entries, fired, warnFired, warnCount, scoreThreshold, signalsStopped, today, views, ss, sl) {
 				fired[c.sym] = true
 				j.fireSignal(ctx, c, scoreThreshold, sl)
 			}
@@ -244,8 +263,11 @@ func (j *ATOMonitorJob) poll(
 	windows map[string]*calculator.StabilityWindow,
 	entries map[string]output.WatchlistEntry,
 	fired map[string]bool,
+	warnFired map[string]bool,
+	warnCount map[string]int,
 	scoreThreshold int,
 	signalsStopped bool,
+	sessionDate time.Time,
 	views map[string]liveView,
 	ss *sessionState,
 	sl *sessionLogger,
@@ -296,6 +318,22 @@ func (j *ATOMonitorJob) poll(
 			analysis: analysis,
 			score:    entries[sym].FinalScore,
 			stable:   windows[sym].StableCount,
+		}
+
+		if analysis.ImbalanceRatio > ss.peakRatio[sym] {
+			ss.peakRatio[sym] = analysis.ImbalanceRatio
+		}
+		ss.lastPrice[sym] = snap.IndicatedPrice
+		ss.lastRefPrice[sym] = snap.RefPrice
+
+		if snap.IndicatedPrice > 0 && analysis.ImbalanceRatio < j.signal.SellWarnRatio {
+			warnCount[sym]++
+			if warnCount[sym] >= j.signal.SellWarnStabilityCount && !warnFired[sym] {
+				warnFired[sym] = true
+				go j.postSellWarn(context.Background(), sym, snap, analysis, entries[sym], sessionDate, sl)
+			}
+		} else {
+			warnCount[sym] = 0
 		}
 
 		if isStable && !ss.seenStable[sym] {
@@ -409,6 +447,207 @@ func (j *ATOMonitorJob) postAISignal(rec output.SignalRecord, threshold int) {
 	}
 }
 
+func (j *ATOMonitorJob) postSellWarn(
+	ctx context.Context,
+	sym string,
+	snap input.OrderBookSnapshot,
+	analysis calculator.SnapshotAnalysis,
+	entry output.WatchlistEntry,
+	sessionDate time.Time,
+	sl *sessionLogger,
+) {
+	ctx, cancel := context.WithTimeout(ctx, j.ato.AITimeout)
+	defer cancel()
+
+	topAsks := snap.AskLevels
+	if len(topAsks) > 5 {
+		topAsks = topAsks[:5]
+	}
+	topBids := snap.BidLevels
+	if len(topBids) > 5 {
+		topBids = topBids[:5]
+	}
+
+	rec := output.SellWarnRecord{
+		Symbol:         sym,
+		SessionDate:    sessionDate,
+		WarnedAt:       time.Now(),
+		IndicatedPrice: snap.IndicatedPrice,
+		RefPrice:       snap.RefPrice,
+		CeilingPrice:   snap.CeilingPrice,
+		ImbalanceRatio: analysis.ImbalanceRatio,
+		TopAskLevels:   topAsks,
+		TopBidLevels:   topBids,
+		FinalScore:     entry.FinalScore,
+		Regime:         string(entry.Regime),
+		CandlePattern:  string(entry.CandlePattern),
+		VPR:            string(entry.VPR),
+		MomentumScore:  entry.MomentumScore,
+	}
+
+	text, err := j.ai.WarnSellPressure(ctx, rec)
+	if err != nil {
+		log.Printf("[ato] %s: sell warn ai: %v", sym, err)
+		return
+	}
+	if text == "" {
+		return
+	}
+
+	sl.warn(sym, "sell_warn", "%s: sell-side warning fired  ratio=%.2fx", sym, analysis.ImbalanceRatio)
+
+	if j.notifier != nil {
+		if err := j.notifier.Notify(ctx, text); err != nil {
+			log.Printf("[ato] %s: sell warn notify: %v", sym, err)
+		}
+	}
+}
+
+func (j *ATOMonitorJob) postSessionSummary(
+	ctx context.Context,
+	watchlist []output.WatchlistEntry,
+	regime string,
+	scoreThreshold int,
+	sessionDate time.Time,
+	fired map[string]bool,
+	active map[string]bool,
+	ss *sessionState,
+) {
+	ctx, cancel := context.WithTimeout(ctx, j.ato.AITimeout)
+	defer cancel()
+
+	entryMap := make(map[string]output.WatchlistEntry, len(watchlist))
+	for _, e := range watchlist {
+		entryMap[e.Symbol] = e
+	}
+
+	allSyms := make(map[string]bool, len(watchlist))
+	for _, e := range watchlist {
+		allSyms[e.Symbol] = true
+	}
+
+	outcomes := make([]output.SymbolSessionOutcome, 0, len(allSyms))
+	for sym := range allSyms {
+		e := entryMap[sym]
+		_, wasDropped := ss.dropReason[sym]
+		out := output.SymbolSessionOutcome{
+			Symbol:          sym,
+			FinalScore:      e.FinalScore,
+			PositionSize:    e.PositionSizeFlag,
+			CandlePattern:   string(e.CandlePattern),
+			VPR:             string(e.VPR),
+			MomentumScore:   e.MomentumScore,
+			PeakRatio:       ss.peakRatio[sym],
+			IndicatedPrice:  ss.lastPrice[sym],
+			RefPrice:        ss.lastRefPrice[sym],
+			SignalFired:     fired[sym],
+			Dropped:         wasDropped,
+			DropReason:      ss.dropReason[sym],
+			GateBlockReason: ss.gateReason[sym],
+		}
+		outcomes = append(outcomes, out)
+	}
+
+	signalCount := 0
+	for _, f := range fired {
+		if f {
+			signalCount++
+		}
+	}
+
+	rec := output.SessionSummaryRecord{
+		SessionDate:    sessionDate,
+		Regime:         regime,
+		ScoreThreshold: scoreThreshold,
+		Outcomes:       outcomes,
+		SignalCount:    signalCount,
+	}
+
+	text, err := j.ai.SummarizeSession(ctx, rec)
+	if err != nil {
+		log.Printf("[ato] session summary ai: %v", err)
+		return
+	}
+	if text == "" {
+		return
+	}
+
+	if err := j.notifier.Notify(ctx, text); err != nil {
+		log.Printf("[ato] session summary notify: %v", err)
+		return
+	}
+
+	if err := j.store.MarkSessionSummarySent(ctx, sessionDate); err != nil {
+		log.Printf("[ato] session summary mark sent: %v", err)
+	}
+}
+
+func (j *ATOMonitorJob) SendSessionSummaryFromDB(ctx context.Context, date time.Time) {
+	ctx, cancel := context.WithTimeout(ctx, j.ato.AITimeout)
+	defer cancel()
+
+	watchlist, err := j.store.LoadWatchlist(ctx)
+	if err != nil {
+		log.Printf("[ato] session summary from db: load watchlist: %v", err)
+		return
+	}
+
+	regime, _, err := j.store.LoadLatestMarketRegime(ctx)
+	if err != nil {
+		log.Printf("[ato] session summary from db: load regime: %v", err)
+	}
+	scoreThreshold := calculator.RegimeScoreThreshold(regime.Regime, j.signal)
+
+	firedSymbols, err := j.store.LoadTodaySignalSymbols(ctx, date)
+	if err != nil {
+		log.Printf("[ato] session summary from db: load signals: %v", err)
+	}
+
+	outcomes := make([]output.SymbolSessionOutcome, 0, len(watchlist))
+	signalCount := 0
+	for _, e := range watchlist {
+		fired := firedSymbols[e.Symbol]
+		if fired {
+			signalCount++
+		}
+		outcomes = append(outcomes, output.SymbolSessionOutcome{
+			Symbol:        e.Symbol,
+			FinalScore:    e.FinalScore,
+			PositionSize:  e.PositionSizeFlag,
+			CandlePattern: string(e.CandlePattern),
+			VPR:           string(e.VPR),
+			MomentumScore: e.MomentumScore,
+			SignalFired:   fired,
+		})
+	}
+
+	rec := output.SessionSummaryRecord{
+		SessionDate:    date,
+		Regime:         string(regime.Regime),
+		ScoreThreshold: scoreThreshold,
+		Outcomes:       outcomes,
+		SignalCount:    signalCount,
+	}
+
+	text, err := j.ai.SummarizeSession(ctx, rec)
+	if err != nil {
+		log.Printf("[ato] session summary from db: ai: %v", err)
+		return
+	}
+	if text == "" {
+		return
+	}
+
+	if err := j.notifier.Notify(ctx, text); err != nil {
+		log.Printf("[ato] session summary from db: notify: %v", err)
+		return
+	}
+
+	if err := j.store.MarkSessionSummarySent(ctx, date); err != nil {
+		log.Printf("[ato] session summary from db: mark sent: %v", err)
+	}
+}
+
 func resetStabilityWindows(windows map[string]*calculator.StabilityWindow) {
 	for sym := range windows {
 		windows[sym].Snapshots = nil
@@ -433,6 +672,7 @@ func dropNoPrice(active map[string]bool, windows map[string]*calculator.Stabilit
 			reason = fmt.Sprintf("%d Quotes received, had price but reverted to 0", quotes)
 		}
 		sl.warn(sym, "dropped_no_price", "%s: no indicated price by %02d:%02d ICT, dropping — %s", sym, dropHour, dropMinute, reason)
+		ss.dropReason[sym] = reason
 		delete(active, sym)
 	}
 }

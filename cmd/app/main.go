@@ -109,6 +109,16 @@ func main() {
 		go atoMonitorJob.Run()
 	}
 
+	if monitored && aiClient != nil && notifier != nil {
+		summarySent, err := store.IsSessionSummarySent(context.Background(), today)
+		if err != nil {
+			log.Printf("[startup] check session summary sent: %v", err)
+		} else if !summarySent {
+			log.Printf("[startup] session summary not yet sent — sending from DB")
+			go atoMonitorJob.SendSessionSummaryFromDB(context.Background(), today)
+		}
+	}
+
 	c := cron.New(cron.WithLocation(ict))
 
 	if _, err := c.AddJob(cfg.Cron.MarketData, marketDataJob); err != nil {

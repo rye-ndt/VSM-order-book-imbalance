@@ -49,6 +49,8 @@ signal:
   choppy_half_score:
   bear_full_score:
   bear_half_score:
+  sell_warn_ratio: 0.50
+  sell_warn_stability_count: 2
 
 ato:
   timezone: "Asia/Ho_Chi_Minh"

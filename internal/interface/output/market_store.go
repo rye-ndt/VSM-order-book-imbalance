@@ -174,6 +174,18 @@ type MarketStore interface {
 	// IsTodayATOMonitored reports whether an ATO session has already been
 	// started for the given date.
 	IsTodayATOMonitored(ctx context.Context, date time.Time) (bool, error)
+
+	// MarkSessionSummarySent records that the end-of-session AI summary was
+	// successfully delivered to subscribers for the given date.
+	MarkSessionSummarySent(ctx context.Context, date time.Time) error
+
+	// IsSessionSummarySent reports whether the end-of-session summary has
+	// already been delivered for the given date.
+	IsSessionSummarySent(ctx context.Context, date time.Time) (bool, error)
+
+	// LoadTodaySignalSymbols returns a set of symbols that fired buy signals
+	// on the given trading date (ICT).
+	LoadTodaySignalSymbols(ctx context.Context, date time.Time) (map[string]bool, error)
 }
 
 // WatchlistEntry is one row from the morning watchlist query.

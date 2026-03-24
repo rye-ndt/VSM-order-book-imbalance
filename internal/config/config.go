@@ -116,6 +116,15 @@ type SignalConfig struct {
 	// Suggested: Full ≥ 12, Half ≥ 9
 	BearFullScore int `mapstructure:"bear_full_score"`
 	BearHalfScore int `mapstructure:"bear_half_score"`
+
+	// SellWarnRatio: imbalance ratio below which asks are considered dominant.
+	// Suggested: 0.50 — fires when asks outvote bids 2:1 or worse
+	SellWarnRatio float64 `mapstructure:"sell_warn_ratio"`
+
+	// SellWarnStabilityCount: consecutive snapshots all below SellWarnRatio
+	// required before a sell warning fires.
+	// Suggested: 2 — ~4 seconds of confirmation at default 2s poll
+	SellWarnStabilityCount int `mapstructure:"sell_warn_stability_count"`
 }
 
 // TwitterConfig holds OAuth 1.0a credentials for posting to X (Twitter).
@@ -233,6 +242,12 @@ func Load(path string) (*Config, error) {
 	}
 	if s.BearHalfScore == 0 {
 		s.BearHalfScore = 9
+	}
+	if s.SellWarnRatio == 0 {
+		s.SellWarnRatio = 0.50
+	}
+	if s.SellWarnStabilityCount == 0 {
+		s.SellWarnStabilityCount = 2
 	}
 
 	if cfg.OpenAI.Model == "" {

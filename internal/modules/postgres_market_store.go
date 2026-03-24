@@ -150,6 +150,8 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 			message      TEXT        NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS ato_session_log_session_date_idx ON ato_session_log (session_date);
+
+		ALTER TABLE daily_crawl_status ADD COLUMN IF NOT EXISTS session_summary_sent BOOLEAN NOT NULL DEFAULT FALSE;
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -649,6 +651,52 @@ func (s *PostgresMarketStore) IsTodayATOMonitored(ctx context.Context, date time
 		return false, fmt.Errorf("check ato monitored: %w", err)
 	}
 	return monitored, nil
+}
+
+func (s *PostgresMarketStore) MarkSessionSummarySent(ctx context.Context, date time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO daily_crawl_status (trading_date, session_summary_sent, updated_at)
+		VALUES ($1::date, true, NOW())
+		ON CONFLICT (trading_date) DO UPDATE SET
+			session_summary_sent = true,
+			updated_at           = NOW()
+	`, date)
+	return err
+}
+
+func (s *PostgresMarketStore) IsSessionSummarySent(ctx context.Context, date time.Time) (bool, error) {
+	var sent bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(
+			(SELECT session_summary_sent FROM daily_crawl_status WHERE trading_date = $1::date),
+			false
+		)
+	`, date).Scan(&sent)
+	if err != nil {
+		return false, fmt.Errorf("check session summary sent: %w", err)
+	}
+	return sent, nil
+}
+
+func (s *PostgresMarketStore) LoadTodaySignalSymbols(ctx context.Context, date time.Time) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol
+		FROM signal_log
+		WHERE (fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date = $1::date
+	`, date)
+	if err != nil {
+		return nil, fmt.Errorf("load today signal symbols: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]bool)
+	for rows.Next() {
+		var sym string
+		if err := rows.Scan(&sym); err != nil {
+			return nil, fmt.Errorf("load today signal symbols: scan: %w", err)
+		}
+		result[sym] = true
+	}
+	return result, rows.Err()
 }
 
 func (s *PostgresMarketStore) AddSubscriber(ctx context.Context, chatID int64) error {
