@@ -186,6 +186,12 @@ type MarketStore interface {
 	// LoadTodaySignalSymbols returns a set of symbols that fired buy signals
 	// on the given trading date (ICT).
 	LoadTodaySignalSymbols(ctx context.Context, date time.Time) (map[string]bool, error)
+
+	// BackfillSignalOutcomes fills close_d0/d1/d2 on signal_log rows where
+	// the corresponding trading date is now present in stock_ohlcv.
+	// Safe to call repeatedly — only updates NULL columns.
+	// Returns the total number of fields updated across all three passes.
+	BackfillSignalOutcomes(ctx context.Context) (int64, error)
 }
 
 // WatchlistEntry is one row from the morning watchlist query.

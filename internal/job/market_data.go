@@ -68,6 +68,13 @@ func (j *MarketDataJob) Run() {
 		log.Printf("[job] mark market data crawled: %v", err)
 	}
 
+	n, err := j.store.BackfillSignalOutcomes(ctx)
+	if err != nil {
+		log.Printf("[job] backfill signal outcomes: %v", err)
+	} else if n > 0 {
+		log.Printf("[job] backfilled %d signal outcome fields", n)
+	}
+
 	j.runAudit(ctx, today)
 }
 

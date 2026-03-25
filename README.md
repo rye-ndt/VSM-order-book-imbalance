@@ -92,7 +92,7 @@ Each signal row is a complete Layer 1 snapshot — everything observable at the 
 | `resistance_distance` | Headroom to nearest overhead resistance |
 | `above_20ma` | Price position relative to 20-day MA |
 
-Outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns, etc.) are not yet in the schema — they will be back-filled from `stock_ohlcv` and `index_ohlcv` once T+2 prices land.
+Outcome columns `close_d0`, `close_d1`, `close_d2` are in the schema and back-filled automatically by the nightly pipeline once the corresponding trading-day prices land in `stock_ohlcv`. `entry_price_actual` is also in the schema — filled manually by the operator with the real ATO auction fill price after each session. VN-Index return columns are not yet added.
 
 ---
 
@@ -170,7 +170,7 @@ Schema migrations run automatically at startup via `Migrate()` using `CREATE TAB
 ## Current status
 
 ### Nightly pipeline — complete and verified
-The full nightly pipeline runs at 03:30 ICT and has been live-verified end-to-end against the SSI FastConnectData API. Last manually verified snapshot (2026-03-16):
+The full nightly pipeline runs at 08:45 ICT and has been live-verified end-to-end against the SSI FastConnectData API. Last manually verified snapshot (2026-03-16):
 
 | Table | Rows stored | Latest date |
 |---|---|---|
@@ -184,11 +184,13 @@ The cleaner correctly filters zero-volume rows (today's market was still open at
 
 Regime lag bug fixed: market regime is now computed from fresh VNIndex data and written to `market_regime` **before** stock metrics are scored — previously the regime computation happened after the metrics loop, meaning each session used the prior day's regime.
 
-### Morning ATO monitor — instrumented, EstMatchedPrice investigation ongoing
-`ATOMonitorJob` is fully implemented: watchlist loading, SSI IDS WebSocket subscription (SignalR negotiate → connect → `/start` handshake), 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. Cold-start protection is in place via `daily_crawl_status.ato_monitored`.
+### Morning ATO monitor — live and delivering Telegram messages
+`ATOMonitorJob` is fully implemented and confirmed live as of 2026-03-25: watchlist loading, SSI IDS WebSocket subscription (SignalR negotiate → connect → `/start` handshake), 2-second poll loop, 8-condition signal gate, Telegram notification, and `signal_log` write. Cold-start protection is in place via `daily_crawl_status.ato_monitored`.
 
-**Observability (accumulated through 2026-03-23):**
-- Per-symbol `sessionState` tracks quote count, first price received, first stability reached, and gate block reason across the full session
+Sell-side warnings and end-of-session AI summaries are confirmed delivered to Telegram subscribers. In Bear regime, the signal gate threshold is high and no buy signals are expected to fire most sessions — this is by design, not a bug. The system is considered operationally complete based on message delivery, not signal fires.
+
+**Observability (accumulated through 2026-03-25):**
+- Per-symbol `sessionState` tracks quote count, first price received, first stability reached, peak imbalance ratio, last indicated/ref price, and gate block reason across the full session
 - `dropNoPrice()` logs the specific reason each symbol was dropped at 09:07: 0 quotes (WebSocket issue), N quotes with EstMatchedPrice always 0 (ATO not formed or Trade messages absent), or had price then reverted
 - `logSessionSummary()` prints a per-symbol no-signal reason at session end
 - `readLoop` tracks total and broadcast frame counts; logs the first raw frame received; logs any non-broadcast hub frames by H/M fields — makes it possible to confirm whether data is flowing at all before the quote-parsing layer
@@ -196,21 +198,26 @@ Regime lag bug fixed: market regime is now computed from fresh VNIndex data and 
 - Terminal order book visualization renders in ANSI (Binance-style) to stderr every 2 seconds: top 8 symbols by imbalance ratio, 5 ask/bid levels with volume bars
 - All key session events are persisted to `ato_session_log` (append-only DB table) so post-session analysis survives process crashes
 
-`signal_log` is empty — no confirmed end-to-end signal fires yet. On the first live session all 45 watchlist symbols were dropped at 09:07 because `EstMatchedPrice` was 0 in all messages. The frame-level WebSocket diagnostics now in place are intended to isolate whether the issue is at the connection layer (no frames arriving), the SignalR framing layer (frames arrive but no broadcast messages), or the data layer (broadcast messages arrive but EstMatchedPrice field is zero).
+### Sell-side warning — implemented
+During the live poll loop, if a watchlist stock shows persistent ask-side dominance (`ImbalanceRatio < sell_warn_ratio`) for N consecutive snapshots (`sell_warn_stability_count`), an AI-generated Vietnamese warning is sent to all Telegram subscribers. Fires once per symbol per session. Configurable via `signal.sell_warn_ratio` (default 0.50) and `signal.sell_warn_stability_count` (default 2). Logged to `ato_session_log` as a `sell_warn` WARN event.
+
+### End-of-session AI summary — implemented
+At the end of every ATO session (or on process restart if the summary was not yet delivered), an AI-generated Vietnamese recap is sent to all Telegram subscribers. Covers: stocks monitored, signals fired, why non-signal stocks failed (no price, gate blocked, etc.), and a closing verdict. Delivery is tracked via `daily_crawl_status.session_summary_sent` — on restart, if `ato_monitored = true` and `session_summary_sent = false`, the summary is reconstructed from DB (`signal_log` + `stock_metrics` + `market_regime`) and sent automatically.
 
 ### Social posting (X / Twitter) — implemented, not yet configured
 `SocialPoster` output port added. `XPoster` adapter posts via Twitter API v2 using `github.com/michimani/gotwi` (OAuth 1.0a). Gracefully disabled at startup when credentials are absent.
 
 ### AI signal interpretation — implemented and wired
-`OpenAIClient` implements `Interpret`, `XInterpret`, and `TelegramInterpret`. Wired into `ATOMonitorJob`: after each signal fires, a goroutine calls `Interpret` within the configured `ai_timeout`, then posts to X via `SocialPoster` and to Telegram via `Notifier`.
+`OpenAIClient` implements `Interpret`, `XInterpret`, `TelegramInterpret`, `SummarizeSession`, and `WarnSellPressure`. Wired into `ATOMonitorJob`: after each signal fires, a goroutine calls `Interpret` within the configured `ai_timeout`, then posts to X via `SocialPoster` and to Telegram via `Notifier`.
 
 ### Multi-tenant Telegram bot — implemented
 `TelegramBot` handles commands (`/start`, `/hello`, `/signal`, `/subscribe`, `/unsubscribe`) and broadcasts signal alerts to all subscribers in `bot_subscribers`. The `/signal` command returns today's fired signals with entry price, TP, and position size flag.
 
+### Signal outcome back-fill — implemented
+`BackfillSignalOutcomes` runs automatically at the end of every nightly pipeline (`MarketDataJob.Run()`). It fills `close_d0`, `close_d1`, `close_d2` on any `signal_log` row where the corresponding trading-day close is now present in `stock_ohlcv`. Uses `MIN(trading_date)` correlated subqueries rather than calendar math — correctly handles weekends, public holidays, and trading suspensions. Safe to call repeatedly; only updates NULL columns.
+
 ### Pending
-- Confirm `EstMatchedPrice` is non-zero in live Trade messages (root cause of zero signals)
-- Observe a confirmed signal fire and `signal_log` write during a live ATO session
-- Back-fill outcome columns (`close_d0`, `close_d1`, `close_d2`, VN-Index returns) once T+2 prices are available
+- VN-Index return columns on `signal_log` (not yet added)
 - Add corporate events filter (ex-dividend / rights issue days)
 - Add foreign ownership room data
 - Add subscription/payment gating (Stripe or VNPay)

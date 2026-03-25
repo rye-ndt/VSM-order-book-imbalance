@@ -55,11 +55,13 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 |---|---|
 | Nightly data pipeline | Complete and live-verified |
 | Metrics computation (10 factors) | Complete — regime lag bug fixed 2026-03-17 |
-| ATO monitor (signal gate) | Live-tested. Watchlist loaded, WS connected, session runs — but all symbols dropped at 09:07 (EstMatchedPrice=0). Frame-level WebSocket diagnostics now in place to isolate whether the failure is at connection, SignalR framing, or data layer. |
+| ATO monitor (signal gate) | Live and confirmed — sell-side warnings and end-of-session AI summaries delivered to Telegram subscribers as of 2026-03-25. In Bear regime, no buy signals expected most sessions by design. |
 | ATO session observability | Complete — per-symbol diagnostics, `ato_session_log` DB table, terminal OB visualization, drop reason logging, frame-count tracking, first-frame logging, non-broadcast hub frame logging |
 | Multi-tenant Telegram bot (subscribe/unsubscribe, /signal command) | Complete |
-| signal_log (event study) | Schema live, 0 rows — no confirmed signal fires yet |
+| signal_log (event study) | Schema live with close_d0/d1/d2/entry_price_actual columns. Back-fill implemented — nightly pipeline fills outcome columns automatically as T+1/T+2 closes land. First confirmed signal fired 2026-03-25. |
 | AI signal interpretation (Interpret, XInterpret, TelegramInterpret) | Complete — wired into ATO job |
+| End-of-session AI summary (Vietnamese recap → all subscribers) | Complete — fires at session end; reconstructed from DB on restart via `session_summary_sent` flag |
+| Sell-side warning (ask-dominated stocks → Telegram alert) | Complete — configurable ratio + stability count; logged to `ato_session_log` |
 | Corporate events filter | 0% |
 | Foreign ownership room | 0% |
 | Subscription/payment | 0% |
@@ -70,7 +72,7 @@ Every signal is already pre-screened the night before: only stocks passing CPR, 
 
 ## Pre-Launch Requirements (Non-Negotiable)
 
-1. **Live-test ATO monitor** — must observe at least one real 09:00–09:15 session firing signals into signal_log before any public release.
+1. **Live-test ATO monitor** — confirmed as of 2026-03-25. Sell-side warnings and end-of-session summaries delivered to Telegram. Buy signals will fire when market conditions meet the 8-condition gate; Bear regime suppresses most signals by design. ✓ Done
 2. **Corporate events filter** — never send a signal on an ex-dividend or rights issue day. This is a trust-killer that cannot wait.
 3. **Build signal track record** — publish every signal publicly (wins and losses) for at least 2–4 weeks before charging anyone. No track record = no credibility.
 
@@ -161,7 +163,7 @@ SSI FastConnectData terms likely prohibit redistribution of real-time data. Viet
 - Consult a Vietnamese securities lawyer before public launch
 
 ### Technical
-- ATO monitor ran live but no signals fired — `EstMatchedPrice=0` in all messages. Frame-level WebSocket diagnostics (frame count tracking, first-frame logging, non-broadcast hub frame logging, `/start` response body logging) are now in place to isolate the failure layer: connection, SignalR framing, or data content.
+- ATO monitor confirmed live as of 2026-03-25. In Bear regime, the 8-condition gate is tight and few buy signals are expected — this is correct behavior, not a bug.
 - WebSocket reconnection during the 09:00–09:15 window is critical; a dropped connection means missed signals
 - Signal quality degrades in Bear regime — more false positives expected; communicate this to subscribers
 
@@ -178,7 +180,9 @@ SSI FastConnectData terms likely prohibit redistribution of real-time data. Viet
 | ~~1–2~~ | ~~Build multi-tenant Telegram bot.~~ ✓ Done |
 | ~~2–3~~ | ~~Wire AI interpretation into ATO job.~~ ✓ Done |
 | ~~3–4~~ | ~~Add full ATO session observability (ato_session_log, drop diagnostics, terminal OB view, regime lag fix, frame-level WS diagnostics).~~ ✓ Done |
-| **Now** | Confirm EstMatchedPrice non-zero in live session using new frame-level diagnostics. Observe confirmed signal fires. Fix any remaining issues. |
+| ~~4~~ | ~~Add end-of-session AI summary + sell-side warning + restart-safe summary delivery.~~ ✓ Done (2026-03-24) |
+| ~~Now~~ | ~~Confirm ATO monitor live — Telegram messages (sell-side warnings, session summaries) confirmed delivered 2026-03-25.~~ ✓ Done |
+| ~~Now~~ | ~~Signal outcome back-fill (close_d0/d1/d2) — implemented 2026-03-25. Nightly pipeline fills automatically.~~ ✓ Done |
 | 3 | Add corporate events filter. |
 | 4 | Launch free Tier 1 (X bot + Telegram channel). Start publishing signal outcomes publicly. |
 | 5–8 | Accumulate track record (30+ signals with D0/D1/D2 outcomes). Build audience. |

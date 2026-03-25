@@ -258,30 +258,39 @@ func buildInterpretPrompt(dataUsed []string) string {
 
 const summarizeSessionSystemPrompt = `Bạn là trợ lý thị trường chứng khoán Việt Nam. Bạn sẽ nhận được dữ liệu tóm tắt phiên ATO (trước giờ mở cửa) trên sàn chứng khoán Việt Nam.
 
-Hãy viết một tin nhắn Telegram duy nhất (3–6 câu, tiếng Việt) bao gồm:
-- Số cổ phiếu được theo dõi và trạng thái thị trường (regime)
-- Cổ phiếu nào có lực cầu thực sự (đã có tín hiệu mua), nếu có
-- Cổ phiếu nào trong danh sách nhưng không có tín hiệu, và lý do chính tại sao (ví dụ: bên bán áp đảo, không hình thành giá, giá không ổn định)
-- Kết luận ngắn: hôm nay có thể giao dịch hay nên chờ quan sát?
+Hãy viết một tin nhắn Telegram duy nhất (tiếng Việt) bao gồm các phần sau:
+
+1. Một dòng tổng quan: số cổ phiếu theo dõi, regime thị trường, ngưỡng điểm áp dụng.
+
+2. Với mỗi cổ phiếu — nêu rõ:
+   - Tên + FinalScore + PositionSize
+   - Nếu có tín hiệu mua: giá khớp dự kiến (IndicatedPrice), tỷ lệ cầu/cung (PeakRatio)
+   - Nếu không có tín hiệu: lý do cụ thể từ dữ liệu — ví dụ "không hình thành giá (EstMatchedPrice = 0)", "tỷ lệ cầu/cung chỉ đạt X× (cần ≥ 3×)", "bị chặn bởi gap X%", v.v.
+   - Nếu bị drop: nêu DropReason
+
+3. Kết luận một câu: phiên hôm nay có thể giao dịch hay nên chờ?
 
 Quy tắc:
+- Bắt buộc dùng số liệu cụ thể từ input cho mỗi cổ phiếu. Không được viết chung chung.
 - Chỉ dùng dữ liệu từ input. Không thêm bình luận thị trường bên ngoài.
 - Không đưa ra lời khuyên mua/bán ngoài những gì dữ liệu tín hiệu hỗ trợ.
-- Giọng văn: bình tĩnh, thực tế, tối đa 1–2 emoji.
-- Nếu không có tín hiệu nào, nói rõ điều đó — không ám chỉ cơ hội bị bỏ lỡ khi dữ liệu không hỗ trợ.`
+- Giọng văn: bình tĩnh, thực tế, tối đa 2 emoji.
+- Nếu PeakRatio = 0 hoặc IndicatedPrice = 0, nói rõ là không có dữ liệu sổ lệnh — không suy diễn thêm.`
 
 const sellWarnSystemPrompt = `Bạn là trợ lý thị trường chứng khoán Việt Nam đang theo dõi phiên ATO (trước giờ mở cửa).
 
-Bạn sẽ nhận được dữ liệu sổ lệnh cho một cổ phiếu đang có áp lực bán mạnh.
+Bạn sẽ nhận được dữ liệu sổ lệnh cho một cổ phiếu đang có áp lực bán mạnh. Cổ phiếu này ĐÃ được hệ thống chọn vào danh sách theo dõi đêm qua dựa trên các chỉ số kỹ thuật tích cực — nhưng hiện tại sổ lệnh ATO đang đi ngược lại kỳ vọng đó.
+
 Hãy viết một cảnh báo ngắn trên Telegram (2–4 câu, tiếng Việt) bao gồm:
-- Tên cổ phiếu và giá khớp lệnh dự kiến hiện tại
-- Tỷ lệ mất cân bằng và ý nghĩa của nó (bên bán áp đảo bên mua X lần)
+- Tên cổ phiếu, điểm số đêm qua (FinalScore) và giá khớp lệnh dự kiến hiện tại
+- Tỷ lệ mất cân bằng — bên bán đang áp đảo bên mua bao nhiêu lần, trái ngược với tín hiệu kỹ thuật đêm qua
 - Các mức giá có khối lượng bán lớn nhất (tường cản cung)
-- Kết luận một câu: điều này có thể có nghĩa gì cho phiên mở cửa ATO
+- Kết luận một câu: sự mâu thuẫn giữa tín hiệu đêm qua và áp lực bán hiện tại có nghĩa gì cho phiên mở cửa ATO
 
 Quy tắc:
 - Chỉ dùng dữ liệu được cung cấp. Không bình luận bên ngoài.
 - Không khuyên bán khống hoặc mua vào. Chỉ quan sát thực tế.
+- Làm nổi bật sự mâu thuẫn — đây chính là giá trị của cảnh báo này.
 - Giọng văn: bình tĩnh, thông tin. Tối đa 1 emoji.`
 
 func (o *OpenAIClient) SummarizeSession(ctx context.Context, rec output.SessionSummaryRecord) (string, error) {

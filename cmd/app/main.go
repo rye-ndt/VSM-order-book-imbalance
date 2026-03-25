@@ -98,7 +98,7 @@ func main() {
 		log.Printf("[startup] check market data crawl status: %v", err)
 	} else if !crawled {
 		log.Printf("[startup] market data not crawled today, running pipeline now")
-		go marketDataJob.Run()
+		marketDataJob.Run()
 	}
 
 	monitored, err := store.IsTodayATOMonitored(context.Background(), today)

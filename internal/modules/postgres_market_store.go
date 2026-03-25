@@ -125,6 +125,10 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS resistance_distance NUMERIC(10, 6) NOT NULL DEFAULT 0;
 		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS above_20ma          BOOLEAN        NOT NULL DEFAULT FALSE;
 		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS position_size_flag  TEXT           NOT NULL DEFAULT 'Skip';
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS close_d0            NUMERIC(18, 2);
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS close_d1            NUMERIC(18, 2);
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS close_d2            NUMERIC(18, 2);
+		ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS entry_price_actual  NUMERIC(18, 2);
 
 		CREATE TABLE IF NOT EXISTS bot_subscribers (
 			chat_id       BIGINT      PRIMARY KEY,
@@ -676,6 +680,60 @@ func (s *PostgresMarketStore) IsSessionSummarySent(ctx context.Context, date tim
 		return false, fmt.Errorf("check session summary sent: %w", err)
 	}
 	return sent, nil
+}
+
+const queryBackfillD0 = `
+	UPDATE signal_log s
+	SET close_d0 = o.close
+	FROM stock_ohlcv o
+	WHERE o.symbol       = s.symbol
+	  AND o.trading_date = (s.fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+	  AND s.close_d0    IS NULL
+`
+
+const queryBackfillD1 = `
+	UPDATE signal_log s
+	SET close_d1 = (
+		SELECT close FROM stock_ohlcv
+		WHERE symbol       = s.symbol
+		  AND trading_date = (
+			SELECT MIN(trading_date) FROM stock_ohlcv
+			WHERE symbol       = s.symbol
+			  AND trading_date > (s.fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+		)
+	)
+	WHERE close_d1 IS NULL
+`
+
+const queryBackfillD2 = `
+	UPDATE signal_log s
+	SET close_d2 = (
+		SELECT close FROM stock_ohlcv
+		WHERE symbol       = s.symbol
+		  AND trading_date = (
+			SELECT MIN(trading_date) FROM stock_ohlcv
+			WHERE symbol       = s.symbol
+			  AND trading_date > (
+				SELECT MIN(trading_date) FROM stock_ohlcv
+				WHERE symbol       = s.symbol
+				  AND trading_date > (s.fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+			)
+		)
+	)
+	WHERE close_d2 IS NULL
+`
+
+func (s *PostgresMarketStore) BackfillSignalOutcomes(ctx context.Context) (int64, error) {
+	var total int64
+	for _, q := range []string{queryBackfillD0, queryBackfillD1, queryBackfillD2} {
+		res, err := s.db.ExecContext(ctx, q)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
 }
 
 func (s *PostgresMarketStore) LoadTodaySignalSymbols(ctx context.Context, date time.Time) (map[string]bool, error) {
