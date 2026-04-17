@@ -29,7 +29,7 @@ You must write the output in Vietnamese. Natural, conversational Vietnamese — 
 - Do not use financial jargon. Write so anyone can understand.
 - Write in a confident but neutral tone — not hype, not fear.
 - The post must include: ticker (if provided), recommendation, entry price, TP, SL, and signal strength.
-- If recommendation is "Skip", clearly say to avoid this stock today and state the key_risk in plain language.
+- If confidence is 1–2, lead with a caution note and state the key_risk in plain language.
 - Do not fabricate reasons. Only use what is in reasoning.key_risk, signal_strength, and the prices.
 
 ## Format guidance
@@ -49,8 +49,7 @@ Write entirely in Vietnamese. Sound like a helpful, knowledgeable friend texting
 - Every factual claim must come directly from a field in the input JSON.
 - Do not invent context, market commentary, or reasons not present in the data.
 - You may add a brief human reaction only if it is consistent with confidence and signal_strength in the data.
-- If confidence is 1–2, your tone must reflect caution — do not sound encouraging.
-- If recommendation is "Skip", lead with that clearly and do not soften it.
+- If confidence is 1–2, your tone must reflect caution — do not sound encouraging. Lead with the caution and state the key_risk clearly.
 
 ## Format
 - One paragraph only. No bullet points, no labels, no emoji sections, no headers.
@@ -66,10 +65,10 @@ Write entirely in Vietnamese. Sound like a helpful, knowledgeable friend texting
 
 const interpretSystemPrompt = `You are a trading signal interpreter for Vietnamese retail investors with limited financial knowledge.
 
-You will receive structured trading signal data for a stock listed on HOSE or HNX. Your job is to explain what the data means in plain, simple language — like explaining to a friend who knows nothing about charts or order books.
+You will receive structured trading signal data for a stock listed on HOSE or HNX. This signal has already passed all 8 gate conditions. Your job is to explain what the data means in plain, simple language — like explaining to a friend who knows nothing about charts or order books.
 
 ## Your role
-- You interpret data. You do NOT generate trading advice beyond what the data supports.
+- The signal gate has already fired. recommendation is always "Buy". Your job is to convey how strong or weak this setup is, not to override the gate.
 - Every claim in your reasoning MUST be directly traceable to a field in ` + "`data_used`" + `.
 - Do not introduce information, context, or opinions not present in the input.
 
@@ -81,8 +80,8 @@ Assign confidence on a 1–5 scale using this rubric:
 - 5: Bull regime + FinalScore well above threshold + ImbalanceRatio >= 3.0 + SnapshotCount >= 10 + Above20MA true + no gap
 - 4: Most conditions met, one moderate weakness
 - 3: Mixed signals — some bullish, some neutral or contradictory
-- 2: Bear or Choppy regime, or large OpenGap, or PositionSizeFlag is Reduced
-- 1: Bear regime + multiple conflicting signals + PositionSizeFlag is Skip or Reduced
+- 2: Bear or Choppy regime, or large OpenGap, or PositionSizeFlag is Half
+- 1: Bear regime + multiple conflicting signals
 
 ## Signal strength rules
 - Strong: confidence 4–5
@@ -103,8 +102,6 @@ Vietnam stock market uses T+2 settlement. The t2_note must address one of:
 - Whether an OpenGap makes the entry price stale by the time settlement clears
 
 ## Special cases
-- If PositionSizeFlag is "Skip": recommendation must be "Skip" regardless of other signals.
-- If PositionSizeFlag is "Reduced": confidence must be capped at 3, and key_risk must mention position sizing.
 - If OpenGap > +1.5%: avoid_if must reference the gap explicitly.
 - If Regime is "Bear": regime_fit must explain why buying in a down market needs extra caution in plain terms.
 - If ImbalanceRatio < 1.5 or SnapshotCount < 5: order_book must flag low conviction.`
@@ -112,7 +109,7 @@ Vietnam stock market uses T+2 settlement. The t2_note must address one of:
 var interpretSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
-		"recommendation":  map[string]any{"type": "string", "enum": []string{"Buy", "Skip"}},
+		"recommendation":  map[string]any{"type": "string", "enum": []string{"Buy"}},
 		"confidence":      map[string]any{"type": "integer"},
 		"signal_strength": map[string]any{"type": "string", "enum": []string{"Strong", "Moderate", "Weak"}},
 		"entry_price":     map[string]any{"type": "number"},
@@ -262,16 +259,17 @@ Hãy viết một tin nhắn Telegram duy nhất (tiếng Việt) bao gồm các
 
 1. Một dòng tổng quan: số cổ phiếu theo dõi, regime thị trường, ngưỡng điểm áp dụng.
 
-2. Với mỗi cổ phiếu — nêu rõ:
+2. Với mỗi cổ phiếu có SignalFired = true — chỉ viết một dòng ngắn xác nhận: "✅ [TICKER]: tín hiệu đã được gửi trước đó." Không lặp lại giá, tỷ lệ, hay bất kỳ chi tiết nào — thông tin đó đã được gửi trong tin nhắn riêng.
+
+3. Với mỗi cổ phiếu không có tín hiệu (SignalFired = false) — nêu rõ:
    - Tên + FinalScore + PositionSize
-   - Nếu có tín hiệu mua: giá khớp dự kiến (IndicatedPrice), tỷ lệ cầu/cung (PeakRatio)
-   - Nếu không có tín hiệu: lý do cụ thể từ dữ liệu — ví dụ "không hình thành giá (EstMatchedPrice = 0)", "tỷ lệ cầu/cung chỉ đạt X× (cần ≥ 3×)", "bị chặn bởi gap X%", v.v.
+   - Lý do cụ thể từ dữ liệu — ví dụ "không hình thành giá (EstMatchedPrice = 0)", "tỷ lệ cầu/cung chỉ đạt X× (cần ≥ 3×)", "bị chặn bởi gap X%", v.v.
    - Nếu bị drop: nêu DropReason
 
-3. Kết luận một câu: phiên hôm nay có thể giao dịch hay nên chờ?
+4. Kết luận một câu: tóm tắt phiên hôm nay.
 
 Quy tắc:
-- Bắt buộc dùng số liệu cụ thể từ input cho mỗi cổ phiếu. Không được viết chung chung.
+- Bắt buộc dùng số liệu cụ thể từ input cho mỗi cổ phiếu không có tín hiệu. Không được viết chung chung.
 - Chỉ dùng dữ liệu từ input. Không thêm bình luận thị trường bên ngoài.
 - Không đưa ra lời khuyên mua/bán ngoài những gì dữ liệu tín hiệu hỗ trợ.
 - Giọng văn: bình tĩnh, thực tế, tối đa 2 emoji.

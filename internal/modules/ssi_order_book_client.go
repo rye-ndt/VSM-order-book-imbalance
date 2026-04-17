@@ -235,6 +235,10 @@ func (c *SSIOrderBookClient) Subscribe(ctx context.Context, symbols []string) er
 		return fmt.Errorf("ssi ob: stream_url is not configured")
 	}
 
+	c.snapMu.Lock()
+	c.cache = make(map[string]input.OrderBookSnapshot)
+	c.snapMu.Unlock()
+
 	token, err := c.bearerToken(ctx)
 	if err != nil {
 		return err
@@ -374,6 +378,11 @@ func (c *SSIOrderBookClient) handleQuote(content string) {
 	snap := quoteToSnapshot(q)
 
 	c.snapMu.Lock()
+	if snap.IndicatedPrice == 0 {
+		if prev, ok := c.cache[q.Symbol]; ok && prev.IndicatedPrice > 0 {
+			snap.IndicatedPrice = prev.IndicatedPrice
+		}
+	}
 	c.cache[q.Symbol] = snap
 	c.snapMu.Unlock()
 }

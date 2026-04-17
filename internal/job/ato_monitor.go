@@ -346,6 +346,13 @@ func (j *ATOMonitorJob) poll(
 			continue
 		}
 
+		if warnFired[sym] {
+			reason := "sell-side warning already sent this session"
+			sl.info(sym, "gate_blocked", "%s: signal gate blocked — %s", sym, reason)
+			ss.gateReason[sym] = reason
+			continue
+		}
+
 		reason, ok := checkSignalGate(snap, entries[sym].FinalScore, scoreThreshold, j.signal)
 		if !ok {
 			sl.info(sym, "gate_blocked", "%s: signal gate blocked — %s", sym, reason)
