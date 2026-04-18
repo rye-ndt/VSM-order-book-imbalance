@@ -309,6 +309,78 @@ func (o *OpenAIClient) SummarizeSession(ctx context.Context, rec output.SessionS
 	return msg.Choices[0].Message.Content, nil
 }
 
+const swingBroadcastSystemPrompt = `Bạn là trợ lý thị trường chứng khoán Việt Nam. Bạn sẽ nhận được danh sách cổ phiếu đã qua sàng lọc kỹ thuật đêm qua để theo dõi trong ngày tiếp theo.
+
+Hãy viết một tin nhắn Telegram duy nhất (tiếng Việt, plain text, không có markdown header) bao gồm các phần sau:
+
+1. Một dòng tổng quan: ngày, regime thị trường, ngưỡng điểm áp dụng, số cổ phiếu trong danh sách.
+
+2. Với mỗi cổ phiếu — viết một khối ngắn gồm:
+   - Tên cổ phiếu, FinalScore, PositionSizeFlag
+   - CandlePattern, VPR, MomentumScore
+   - Mức TP và SL (nếu có)
+
+3. Một câu kết: hướng dẫn sizing dựa trên regime.
+
+Quy tắc bắt buộc:
+- Chỉ đề cập các cổ phiếu có trong danh sách đầu vào. Không thêm cổ phiếu khác.
+- Không bịa đặt giá, điểm số, hoặc bất kỳ thông tin nào không có trong dữ liệu đầu vào.
+- Không đưa ra lời khuyên đầu tư ngoài những gì schema hỗ trợ.
+- Không bình luận thị trường vĩ mô ngoài trường regime được cung cấp.
+- Giọng văn: bình tĩnh, thực tế. Tối đa 2 emoji.
+- Sử dụng xuống dòng để phân tách các cổ phiếu.`
+
+func buildSwingDataUsed(rec output.SwingBroadcastRecord) []string {
+	lines := []string{
+		fmt.Sprintf("SignalDate: %s", rec.SignalDate.Format("02/01/2006")),
+		fmt.Sprintf("Regime: %s", rec.Regime),
+		fmt.Sprintf("ScoreThreshold: %d", rec.ScoreThreshold),
+		fmt.Sprintf("TotalWatchlist: %d", rec.TotalWatchlist),
+	}
+	for _, s := range rec.Stocks {
+		above20MA := "false"
+		if s.Above20MA {
+			above20MA = "true"
+		}
+		foreignBuy := "false"
+		if s.ForeignNetBuy {
+			foreignBuy = "true"
+		}
+		lines = append(lines,
+			fmt.Sprintf("Stock: %s | FinalScore: %d | PositionSizeFlag: %s | CandlePattern: %s | VPR: %s | VolumeTrend: %s | VolumeRatio: %.2fx | MomentumScore: %d | ResistanceDistance: %.2f%% | Above20MA: %s | ForeignNetBuy: %s | EntryPrice: %.0f | SLPrice: %.0f | TPPrice: %.0f",
+				s.Symbol, s.FinalScore, s.PositionSizeFlag,
+				string(s.CandlePattern), string(s.VPR), string(s.VolumeTrend),
+				s.VolumeRatio, s.MomentumScore, s.ResistanceDistance*100,
+				above20MA, foreignBuy,
+				s.EntryPrice, s.SLPrice, s.TPPrice,
+			),
+		)
+	}
+	return lines
+}
+
+func (o *OpenAIClient) SwingBroadcast(ctx context.Context, rec output.SwingBroadcastRecord) (string, error) {
+	if len(rec.Stocks) == 0 {
+		return "", nil
+	}
+	dataUsed := buildSwingDataUsed(rec)
+	userMsg := fmt.Sprintf("DỮ LIỆU ĐẦU VÀO:\n%s\n\nDATA_USED (echo this array exactly in your response — do not invent values not listed here):\n%s",
+		strings.Join(dataUsed, "\n"),
+		func() string { b, _ := json.Marshal(dataUsed); return string(b) }(),
+	)
+	msg, err := o.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: o.model,
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(swingBroadcastSystemPrompt),
+			openai.UserMessage(userMsg),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("openai: swing broadcast: %w", err)
+	}
+	return msg.Choices[0].Message.Content, nil
+}
+
 func (o *OpenAIClient) WarnSellPressure(ctx context.Context, rec output.SellWarnRecord) (string, error) {
 	payload, err := json.Marshal(rec)
 	if err != nil {

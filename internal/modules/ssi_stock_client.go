@@ -296,6 +296,10 @@ type ssiStockPriceRecord struct {
 	ForeignSellVolTotal string `json:"ForeignSellVolTotal"`
 	ForeignBuyValTotal  string `json:"ForeignBuyValTotal"`
 	ForeignSellValTotal string `json:"ForeignSellValTotal"`
+	PropBuyVol          string `json:"propBuyVol"`
+	PropSellVol         string `json:"propSellVol"`
+	PropBuyVal          string `json:"propBuyVal"`
+	PropSellVal         string `json:"propSellVal"`
 }
 
 func (c *SSIStockClient) fetchStockPricePage(
@@ -343,15 +347,25 @@ func (c *SSIStockClient) FetchForeignFlow(ctx context.Context, from, to time.Tim
 			sellVol := parseFloat(r.ForeignSellVolTotal)
 			buyVal := parseFloat(r.ForeignBuyValTotal)
 			sellVal := parseFloat(r.ForeignSellValTotal)
+			propBuyVol := int64(parseFloat(r.PropBuyVol))
+			propSellVol := int64(parseFloat(r.PropSellVol))
+			propBuyVal := parseFloat(r.PropBuyVal)
+			propSellVal := parseFloat(r.PropSellVal)
 			all = append(all, input.ForeignFlow{
-				Symbol:      r.Symbol,
-				TradingDate: r.TradingDate,
-				BuyVolume:   buyVol,
-				SellVolume:  sellVol,
-				BuyValue:    buyVal,
-				SellValue:   sellVal,
-				NetVolume:   buyVol - sellVol,
-				NetValue:    buyVal - sellVal,
+				Symbol:        r.Symbol,
+				TradingDate:   r.TradingDate,
+				BuyVolume:     buyVol,
+				SellVolume:    sellVol,
+				BuyValue:      buyVal,
+				SellValue:     sellVal,
+				NetVolume:     buyVol - sellVol,
+				NetValue:      buyVal - sellVal,
+				PropBuyVolume: propBuyVol,
+				PropSellVolume: propSellVol,
+				PropNetVolume: propBuyVol - propSellVol,
+				PropBuyValue:  propBuyVal,
+				PropSellValue: propSellVal,
+				PropNetValue:  propBuyVal - propSellVal,
 			})
 		}
 		if len(all) >= total || len(records) < ssiPageSize {

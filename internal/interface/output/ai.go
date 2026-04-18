@@ -14,6 +14,7 @@ type AI interface {
 	TelegramInterpret(ctx context.Context, interp SignalInterpretation) (string, error)
 	SummarizeSession(ctx context.Context, rec SessionSummaryRecord) (string, error)
 	WarnSellPressure(ctx context.Context, rec SellWarnRecord) (string, error)
+	SwingBroadcast(ctx context.Context, rec SwingBroadcastRecord) (string, error)
 }
 
 type SymbolSessionOutcome struct {

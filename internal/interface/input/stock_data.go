@@ -30,6 +30,13 @@ type ForeignFlow struct {
 	SellValue   float64 // foreignsellvaltotal (VND)
 	NetVolume   float64 // BuyVolume - SellVolume
 	NetValue    float64 // BuyValue  - SellValue  (VND)
+
+	PropBuyVolume  int64
+	PropSellVolume int64
+	PropNetVolume  int64
+	PropBuyValue   float64
+	PropSellValue  float64
+	PropNetValue   float64
 }
 
 // StockDataClient is the input port for fetching historical market data from

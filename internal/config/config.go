@@ -20,6 +20,14 @@ type Config struct {
 	Signal         SignalConfig   `mapstructure:"signal"`
 	Cron           CronConfig     `mapstructure:"cron"`
 	ATO            ATOConfig      `mapstructure:"ato"`
+	SignalMode     string         `mapstructure:"signal_mode"`
+	Swing          SwingConfig    `mapstructure:"swing"`
+}
+
+type SwingConfig struct {
+	Cron             string        `mapstructure:"cron"`
+	MaxWatchlistSize int           `mapstructure:"max_watchlist_size"`
+	AITimeout        time.Duration `mapstructure:"ai_timeout"`
 }
 
 type ATOConfig struct {
@@ -248,6 +256,19 @@ func Load(path string) (*Config, error) {
 	}
 	if s.SellWarnStabilityCount == 0 {
 		s.SellWarnStabilityCount = 2
+	}
+
+	if cfg.SignalMode == "" {
+		cfg.SignalMode = "ato"
+	}
+	if cfg.Swing.Cron == "" {
+		cfg.Swing.Cron = "0 4 * * *"
+	}
+	if cfg.Swing.MaxWatchlistSize == 0 {
+		cfg.Swing.MaxWatchlistSize = 10
+	}
+	if cfg.Swing.AITimeout == 0 {
+		cfg.Swing.AITimeout = 45 * time.Second
 	}
 
 	if cfg.OpenAI.Model == "" {

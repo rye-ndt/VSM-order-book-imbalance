@@ -34,6 +34,7 @@ type SignalRecord struct {
 	ResistanceDistance float64
 	Above20MA          bool
 	PositionSizeFlag   string
+	SignalQuality      string
 }
 
 type VolumeTrend string
@@ -192,6 +193,38 @@ type MarketStore interface {
 	// Safe to call repeatedly — only updates NULL columns.
 	// Returns the total number of fields updated across all three passes.
 	BackfillSignalOutcomes(ctx context.Context) (int64, error)
+
+	// LogSwingSignals persists a batch of swing signal rows.
+	// Duplicate (symbol, signal_date) pairs are silently ignored.
+	LogSwingSignals(ctx context.Context, records []SwingSignalRecord) error
+
+	// BackfillSwingOutcomes fills close_d1/d2/d3/d5/d10 on swing_signal_log
+	// rows where enough trading days have landed in stock_ohlcv.
+	// Safe to call repeatedly — only updates NULL columns.
+	// Returns total rows updated.
+	BackfillSwingOutcomes(ctx context.Context) (int, error)
+
+	// IsSwingSignalSent reports whether the swing signal broadcast has already
+	// been delivered for the given date.
+	IsSwingSignalSent(ctx context.Context, date time.Time) (bool, error)
+
+	// MarkSwingSignalSent records that the swing signal broadcast was
+	// successfully delivered for the given date.
+	MarkSwingSignalSent(ctx context.Context, date time.Time) error
+
+	// LoadSwingWatchlist returns all swing_signal_log rows for the given date,
+	// ordered by final_score descending.
+	LoadSwingWatchlist(ctx context.Context, date time.Time) ([]SwingSignalRecord, error)
+
+	// LogATODailyResults persists one ATODailyResult row per watchlist symbol at
+	// end of session. Uses ON CONFLICT DO UPDATE so restarts don't lose state.
+	LogATODailyResults(ctx context.Context, records []ATODailyResult) error
+
+	// BackfillATODailyOutcomes fills close_d0/d1/d2 on ato_daily_result rows
+	// where the corresponding trading date is now present in stock_ohlcv.
+	// Safe to call repeatedly — only updates NULL columns.
+	// Returns the total number of fields updated.
+	BackfillATODailyOutcomes(ctx context.Context) (int, error)
 }
 
 // WatchlistEntry is one row from the morning watchlist query.
@@ -209,4 +242,5 @@ type WatchlistEntry struct {
 	ResistanceDistance float64
 	Above20MA          bool
 	PositionSizeFlag   string
+	Close              float64
 }

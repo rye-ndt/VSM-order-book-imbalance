@@ -156,6 +156,73 @@ func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS ato_session_log_session_date_idx ON ato_session_log (session_date);
 
 		ALTER TABLE daily_crawl_status ADD COLUMN IF NOT EXISTS session_summary_sent BOOLEAN NOT NULL DEFAULT FALSE;
+
+		CREATE TABLE IF NOT EXISTS swing_signal_log (
+			id                  SERIAL PRIMARY KEY,
+			symbol              TEXT NOT NULL,
+			signal_date         DATE NOT NULL,
+			regime              TEXT NOT NULL,
+			final_score         INT NOT NULL,
+			position_size_flag  TEXT NOT NULL,
+			candle_pattern      TEXT NOT NULL,
+			vpr                 TEXT NOT NULL,
+			volume_trend        TEXT NOT NULL,
+			volume_ratio        FLOAT NOT NULL,
+			momentum_score      INT NOT NULL,
+			resistance_distance FLOAT NOT NULL,
+			above_20ma          BOOLEAN NOT NULL,
+			foreign_net_buy     BOOLEAN NOT NULL,
+			entry_price         FLOAT,
+			sl_price            FLOAT,
+			tp_price            FLOAT,
+			close_d1            FLOAT,
+			close_d2            FLOAT,
+			close_d3            FLOAT,
+			close_d5            FLOAT,
+			close_d10           FLOAT,
+			created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (symbol, signal_date)
+		);
+
+		ALTER TABLE daily_crawl_status
+			ADD COLUMN IF NOT EXISTS swing_signal_sent BOOLEAN NOT NULL DEFAULT FALSE;
+
+		CREATE TABLE IF NOT EXISTS ato_daily_result (
+			id                       SERIAL PRIMARY KEY,
+			session_date             DATE NOT NULL,
+			symbol                   TEXT NOT NULL,
+			regime                   TEXT NOT NULL,
+			final_score              INT NOT NULL,
+			position_size_flag       TEXT NOT NULL,
+			had_indicated_price      BOOLEAN NOT NULL DEFAULT FALSE,
+			quote_count              INT NOT NULL DEFAULT 0,
+			early_ratio              FLOAT,
+			peak_imbalance_ratio     FLOAT,
+			final_indicated_price    FLOAT,
+			ref_price                FLOAT,
+			ceil_price               FLOAT,
+			sell_warn_fired          BOOLEAN NOT NULL DEFAULT FALSE,
+			stable_snapshots_at_fire INT,
+			signal_fired             BOOLEAN NOT NULL DEFAULT FALSE,
+			gate_block_reason        TEXT,
+			drop_reason              TEXT,
+			close_d0                 FLOAT,
+			close_d1                 FLOAT,
+			close_d2                 FLOAT,
+			created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (symbol, session_date)
+		);
+
+		ALTER TABLE signal_log
+			ADD COLUMN IF NOT EXISTS signal_quality TEXT NOT NULL DEFAULT 'Confirmed';
+
+		ALTER TABLE stock_foreign_flow
+			ADD COLUMN IF NOT EXISTS prop_buy_volume  BIGINT,
+			ADD COLUMN IF NOT EXISTS prop_sell_volume BIGINT,
+			ADD COLUMN IF NOT EXISTS prop_net_volume  BIGINT,
+			ADD COLUMN IF NOT EXISTS prop_buy_value   NUMERIC(20,2),
+			ADD COLUMN IF NOT EXISTS prop_sell_value  NUMERIC(20,2),
+			ADD COLUMN IF NOT EXISTS prop_net_value   NUMERIC(20,2);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -230,7 +297,7 @@ func (s *PostgresMarketStore) UpsertForeignFlow(ctx context.Context, records []i
 	if len(records) == 0 {
 		return nil
 	}
-	const cols = 8
+	const cols = 14
 	const batchSize = 500
 
 	for start := 0; start < len(records); start += batchSize {
@@ -244,24 +311,38 @@ func (s *PostgresMarketStore) UpsertForeignFlow(ctx context.Context, records []i
 			date, _ := time.Parse(ssiStoreDateFormat, r.TradingDate)
 			b := i * cols
 			rows = append(rows, fmt.Sprintf(
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NOW())",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),NOW())",
 				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8,
+				b+9, b+10, b+11, b+12, b+13, b+14,
 			))
-			args = append(args, r.Symbol, date, r.BuyVolume, r.SellVolume, r.BuyValue, r.SellValue, r.NetVolume, r.NetValue)
+			args = append(args,
+				r.Symbol, date,
+				r.BuyVolume, r.SellVolume, r.BuyValue, r.SellValue, r.NetVolume, r.NetValue,
+				r.PropBuyVolume, r.PropSellVolume, r.PropNetVolume,
+				r.PropBuyValue, r.PropSellValue, r.PropNetValue,
+			)
 		}
 
 		q := fmt.Sprintf(`
 			INSERT INTO stock_foreign_flow
-				(symbol, trading_date, buy_volume, sell_volume, buy_value, sell_value, net_volume, net_value, updated_at)
+				(symbol, trading_date, buy_volume, sell_volume, buy_value, sell_value, net_volume, net_value,
+				 prop_buy_volume, prop_sell_volume, prop_net_volume, prop_buy_value, prop_sell_value, prop_net_value,
+				 updated_at)
 			VALUES %s
 			ON CONFLICT (symbol, trading_date) DO UPDATE SET
-				buy_volume  = EXCLUDED.buy_volume,
-				sell_volume = EXCLUDED.sell_volume,
-				buy_value   = EXCLUDED.buy_value,
-				sell_value  = EXCLUDED.sell_value,
-				net_volume  = EXCLUDED.net_volume,
-				net_value   = EXCLUDED.net_value,
-				updated_at  = NOW()
+				buy_volume       = EXCLUDED.buy_volume,
+				sell_volume      = EXCLUDED.sell_volume,
+				buy_value        = EXCLUDED.buy_value,
+				sell_value       = EXCLUDED.sell_value,
+				net_volume       = EXCLUDED.net_volume,
+				net_value        = EXCLUDED.net_value,
+				prop_buy_volume  = EXCLUDED.prop_buy_volume,
+				prop_sell_volume = EXCLUDED.prop_sell_volume,
+				prop_net_volume  = EXCLUDED.prop_net_volume,
+				prop_buy_value   = EXCLUDED.prop_buy_value,
+				prop_sell_value  = EXCLUDED.prop_sell_value,
+				prop_net_value   = EXCLUDED.prop_net_value,
+				updated_at       = NOW()
 		`, strings.Join(rows, ","))
 
 		if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
@@ -477,11 +558,13 @@ func (s *PostgresMarketStore) LoadWatchlist(ctx context.Context) ([]output.Watch
 			sm.momentum_score,
 			sm.resistance_distance,
 			sm.above_20ma,
-			sm.position_size_flag
+			sm.position_size_flag,
+			COALESCE(o.close, 0)
 		FROM stock_metrics sm
 		LEFT JOIN LATERAL (
 			SELECT regime FROM market_regime ORDER BY trading_date DESC LIMIT 1
 		) mr ON true
+		LEFT JOIN stock_ohlcv o ON o.symbol = sm.symbol AND o.trading_date = sm.trading_date
 		WHERE sm.position_size_flag != 'Skip'
 		  AND sm.trading_date = (SELECT MAX(trading_date) FROM stock_metrics)
 		  AND sm.symbol !~ '^C[A-Z]+[0-9]{4}$'
@@ -501,7 +584,7 @@ func (s *PostgresMarketStore) LoadWatchlist(ctx context.Context) ([]output.Watch
 			&e.Symbol, &e.FinalScore,
 			&regime, &candlePattern, &vpr, &volumeTrend,
 			&e.VolumeRatio, &e.MomentumScore, &e.ResistanceDistance,
-			&e.Above20MA, &e.PositionSizeFlag,
+			&e.Above20MA, &e.PositionSizeFlag, &e.Close,
 		); err != nil {
 			return nil, fmt.Errorf("scan watchlist entry: %w", err)
 		}
@@ -519,23 +602,30 @@ func (s *PostgresMarketStore) LogSignal(ctx context.Context, r output.SignalReco
 	if !r.SnapshotFiredAt.IsZero() {
 		snapshotFiredAt = &r.SnapshotFiredAt
 	}
+	quality := r.SignalQuality
+	if quality == "" {
+		quality = "Confirmed"
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO signal_log (
 			symbol, final_score, entry_price, tp_price, fired_at,
 			indicated_price, open_gap, imbalance_ratio, snapshot_count, snapshot_fired_at,
 			regime, candle_pattern, vpr, volume_trend, volume_ratio,
-			momentum_score, resistance_distance, above_20ma, position_size_flag
+			momentum_score, resistance_distance, above_20ma, position_size_flag,
+			signal_quality
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, $8, $9, $10,
 			$11, $12, $13, $14, $15,
-			$16, $17, $18, $19
+			$16, $17, $18, $19,
+			$20
 		)
 	`,
 		r.Symbol, r.FinalScore, r.IndicatedPrice, r.TPPrice, r.FiredAt,
 		r.IndicatedPrice, r.OpenGap, r.ImbalanceRatio, r.SnapshotCount, snapshotFiredAt,
 		string(r.Regime), string(r.CandlePattern), string(r.VPR), string(r.VolumeTrend), r.VolumeRatio,
 		r.MomentumScore, r.ResistanceDistance, r.Above20MA, r.PositionSizeFlag,
+		quality,
 	)
 	return err
 }
@@ -736,6 +826,189 @@ func (s *PostgresMarketStore) BackfillSignalOutcomes(ctx context.Context) (int64
 	return total, nil
 }
 
+func (s *PostgresMarketStore) LogSwingSignals(ctx context.Context, records []output.SwingSignalRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("log swing signals: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	const cols = 16
+	args := make([]any, 0, len(records)*cols)
+	rows := make([]string, 0, len(records))
+
+	for i, r := range records {
+		b := i * cols
+		rows = append(rows, fmt.Sprintf(
+			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15, b+16,
+		))
+		args = append(args,
+			r.Symbol, r.SignalDate,
+			string(r.Regime), r.FinalScore, r.PositionSizeFlag,
+			string(r.CandlePattern), string(r.VPR), string(r.VolumeTrend),
+			r.VolumeRatio, r.MomentumScore, r.ResistanceDistance,
+			r.Above20MA, r.ForeignNetBuy,
+			r.EntryPrice, r.SLPrice, r.TPPrice,
+		)
+	}
+
+	q := fmt.Sprintf(`
+		INSERT INTO swing_signal_log
+			(symbol, signal_date, regime, final_score, position_size_flag,
+			 candle_pattern, vpr, volume_trend, volume_ratio, momentum_score,
+			 resistance_distance, above_20ma, foreign_net_buy,
+			 entry_price, sl_price, tp_price)
+		VALUES %s
+		ON CONFLICT (symbol, signal_date) DO NOTHING
+	`, strings.Join(rows, ","))
+
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("log swing signals: insert: %w", err)
+	}
+	return tx.Commit()
+}
+
+const querySwingBackfillD1 = `
+	UPDATE swing_signal_log s
+	SET close_d1 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 0
+	)
+	WHERE s.close_d1 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date) >= 1
+`
+
+const querySwingBackfillD2 = `
+	UPDATE swing_signal_log s
+	SET close_d2 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 1
+	)
+	WHERE s.close_d2 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date) >= 2
+`
+
+const querySwingBackfillD3 = `
+	UPDATE swing_signal_log s
+	SET close_d3 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 2
+	)
+	WHERE s.close_d3 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date) >= 3
+`
+
+const querySwingBackfillD5 = `
+	UPDATE swing_signal_log s
+	SET close_d5 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 4
+	)
+	WHERE s.close_d5 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date) >= 5
+`
+
+const querySwingBackfillD10 = `
+	UPDATE swing_signal_log s
+	SET close_d10 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 9
+	)
+	WHERE s.close_d10 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = s.symbol AND o.trading_date > s.signal_date) >= 10
+`
+
+func (s *PostgresMarketStore) BackfillSwingOutcomes(ctx context.Context) (int, error) {
+	var total int
+	for _, q := range []string{
+		querySwingBackfillD1, querySwingBackfillD2, querySwingBackfillD3,
+		querySwingBackfillD5, querySwingBackfillD10,
+	} {
+		res, err := s.db.ExecContext(ctx, q)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+	return total, nil
+}
+
+func (s *PostgresMarketStore) IsSwingSignalSent(ctx context.Context, date time.Time) (bool, error) {
+	var sent bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(
+			(SELECT swing_signal_sent FROM daily_crawl_status WHERE trading_date = $1::date),
+			false
+		)
+	`, date).Scan(&sent)
+	if err != nil {
+		return false, fmt.Errorf("check swing signal sent: %w", err)
+	}
+	return sent, nil
+}
+
+func (s *PostgresMarketStore) MarkSwingSignalSent(ctx context.Context, date time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO daily_crawl_status (trading_date, swing_signal_sent, updated_at)
+		VALUES ($1::date, true, NOW())
+		ON CONFLICT (trading_date) DO UPDATE SET
+			swing_signal_sent = true,
+			updated_at        = NOW()
+	`, date)
+	return err
+}
+
+func (s *PostgresMarketStore) LoadSwingWatchlist(ctx context.Context, date time.Time) ([]output.SwingSignalRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol, signal_date, regime, final_score, position_size_flag,
+		       candle_pattern, vpr, volume_trend, volume_ratio, momentum_score,
+		       resistance_distance, above_20ma, foreign_net_buy,
+		       COALESCE(entry_price, 0), COALESCE(sl_price, 0), COALESCE(tp_price, 0)
+		FROM swing_signal_log
+		WHERE signal_date = $1::date
+		ORDER BY final_score DESC
+	`, date)
+	if err != nil {
+		return nil, fmt.Errorf("load swing watchlist: %w", err)
+	}
+	defer rows.Close()
+
+	var result []output.SwingSignalRecord
+	for rows.Next() {
+		var r output.SwingSignalRecord
+		var regime, candlePattern, vpr, volumeTrend string
+		if err := rows.Scan(
+			&r.Symbol, &r.SignalDate, &regime, &r.FinalScore, &r.PositionSizeFlag,
+			&candlePattern, &vpr, &volumeTrend, &r.VolumeRatio, &r.MomentumScore,
+			&r.ResistanceDistance, &r.Above20MA, &r.ForeignNetBuy,
+			&r.EntryPrice, &r.SLPrice, &r.TPPrice,
+		); err != nil {
+			return nil, fmt.Errorf("scan swing watchlist: %w", err)
+		}
+		r.Regime = output.RegimeLabel(regime)
+		r.CandlePattern = output.CandlePattern(candlePattern)
+		r.VPR = output.VPRLabel(vpr)
+		r.VolumeTrend = output.VolumeTrend(volumeTrend)
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresMarketStore) LoadTodaySignalSymbols(ctx context.Context, date time.Time) (map[string]bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol
@@ -786,6 +1059,99 @@ func (s *PostgresMarketStore) LoadSubscribers(ctx context.Context) ([]int64, err
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+const queryATOBackfillD0 = `
+	UPDATE ato_daily_result a
+	SET close_d0 = o.close
+	FROM stock_ohlcv o
+	WHERE o.symbol       = a.symbol
+	  AND o.trading_date = a.session_date
+	  AND a.close_d0    IS NULL
+`
+
+const queryATOBackfillD1 = `
+	UPDATE ato_daily_result a
+	SET close_d1 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = a.symbol AND o.trading_date > a.session_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 0
+	)
+	WHERE a.close_d1 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = a.symbol AND o.trading_date > a.session_date) >= 1
+`
+
+const queryATOBackfillD2 = `
+	UPDATE ato_daily_result a
+	SET close_d2 = (
+		SELECT o.close FROM stock_ohlcv o
+		WHERE o.symbol = a.symbol AND o.trading_date > a.session_date
+		ORDER BY o.trading_date LIMIT 1 OFFSET 1
+	)
+	WHERE a.close_d2 IS NULL
+	  AND (SELECT COUNT(*) FROM stock_ohlcv o
+	       WHERE o.symbol = a.symbol AND o.trading_date > a.session_date) >= 2
+`
+
+func (s *PostgresMarketStore) BackfillATODailyOutcomes(ctx context.Context) (int, error) {
+	var total int
+	for _, q := range []string{queryATOBackfillD0, queryATOBackfillD1, queryATOBackfillD2} {
+		res, err := s.db.ExecContext(ctx, q)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+	return total, nil
+}
+
+func (s *PostgresMarketStore) LogATODailyResults(ctx context.Context, records []output.ATODailyResult) error {
+	if len(records) == 0 {
+		return nil
+	}
+	const cols = 17
+	args := make([]any, 0, len(records)*cols)
+	rows := make([]string, 0, len(records))
+
+	for i, r := range records {
+		b := i * cols
+		rows = append(rows, fmt.Sprintf(
+			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),NULLIF($%d,0),$%d,NULLIF($%d,0),$%d,NULLIF($%d,''),NULLIF($%d,''))",
+			b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11, b+12, b+13, b+14, b+15, b+16, b+17,
+		))
+		args = append(args,
+			r.SessionDate, r.Symbol, r.Regime, r.FinalScore, r.PositionSizeFlag,
+			r.HadIndicatedPrice, r.QuoteCount,
+			r.EarlyRatio, r.PeakImbalanceRatio, r.FinalIndicatedPrice, r.RefPrice, r.CeilPrice,
+			r.SellWarnFired, r.StableSnapshotsAtFire, r.SignalFired,
+			r.GateBlockReason, r.DropReason,
+		)
+	}
+
+	q := fmt.Sprintf(`
+		INSERT INTO ato_daily_result
+			(session_date, symbol, regime, final_score, position_size_flag,
+			 had_indicated_price, quote_count,
+			 early_ratio, peak_imbalance_ratio, final_indicated_price, ref_price, ceil_price,
+			 sell_warn_fired, stable_snapshots_at_fire, signal_fired,
+			 gate_block_reason, drop_reason)
+		VALUES %s
+		ON CONFLICT (symbol, session_date) DO UPDATE SET
+			peak_imbalance_ratio    = EXCLUDED.peak_imbalance_ratio,
+			final_indicated_price   = EXCLUDED.final_indicated_price,
+			sell_warn_fired         = EXCLUDED.sell_warn_fired,
+			stable_snapshots_at_fire = EXCLUDED.stable_snapshots_at_fire,
+			signal_fired            = EXCLUDED.signal_fired,
+			gate_block_reason       = EXCLUDED.gate_block_reason,
+			drop_reason             = EXCLUDED.drop_reason,
+			quote_count             = EXCLUDED.quote_count,
+			had_indicated_price     = EXCLUDED.had_indicated_price
+	`, strings.Join(rows, ","))
+
+	_, err := s.db.ExecContext(ctx, q, args...)
+	return err
 }
 
 func (s *PostgresMarketStore) LoadRecentIndexOHLCV(ctx context.Context, symbol string, days int) ([]input.OHLCV, error) {

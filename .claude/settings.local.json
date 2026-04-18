@@ -35,7 +35,8 @@
       "Bash(/usr/bin/curl -s --http1.1 \"https://fc-datahub.ssi.com.vn/v2.0/signalr/negotiate?clientProtocol=1.5&connectionData=%5B%7B%22name%22%3A%22broadcasthub%22%7D%5D&token=$TOKEN\")",
       "Bash(ls *.yaml *.yml)",
       "Bash(__NEW_LINE_8b2c5d81efc81963__ psql -h localhost -p 5432 -U rye -d orderbook -c \":*)",
-      "Bash(__NEW_LINE_8b2c5d81efc81963__ psql:*)"
+      "Bash(__NEW_LINE_8b2c5d81efc81963__ psql:*)",
+      "Bash(go vet *)"
     ]
   }
 }

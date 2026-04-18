@@ -12,6 +12,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/example/order-book-imbalance/internal/config"
+	"github.com/example/order-book-imbalance/internal/interface/input"
 	"github.com/example/order-book-imbalance/internal/interface/output"
 	"github.com/example/order-book-imbalance/internal/job"
 	"github.com/example/order-book-imbalance/internal/modules"
@@ -36,7 +37,11 @@ func main() {
 
 	stockClient := modules.NewSSIStockClient(cfg.SSI)
 	store := modules.NewPostgresMarketStore(db)
-	obClient := modules.NewSSIOrderBookClient(cfg.SSI)
+
+	var obClient input.OrderBookClient
+	if cfg.SignalMode != "swing" {
+		obClient = modules.NewSSIOrderBookClient(cfg.SSI)
+	}
 
 	tgBot, err := modules.NewTelegramBot(cfg.Telegram, store)
 	if err != nil {
@@ -83,14 +88,15 @@ func main() {
 	} else {
 		log.Printf("[startup] SSI REST API: OK")
 	}
-	if err := obClient.Ping(pingCtx); err != nil {
-		log.Printf("[startup] SSI IDS ping failed: %v", err)
-	} else {
-		log.Printf("[startup] SSI IDS: OK")
+	if cfg.SignalMode != "swing" {
+		if err := obClient.Ping(pingCtx); err != nil {
+			log.Printf("[startup] SSI IDS ping failed: %v", err)
+		} else {
+			log.Printf("[startup] SSI IDS: OK")
+		}
 	}
 
 	marketDataJob := job.NewMarketDataJob(stockClient, store, cfg.Signal, ict)
-	atoMonitorJob := job.NewATOMonitorJob(store, obClient, notifier, socialPoster, aiClient, cfg.Signal, cfg.ATO)
 
 	today := time.Now().In(ict)
 	crawled, err := store.IsTodayMarketDataCrawled(context.Background(), today)
@@ -101,32 +107,52 @@ func main() {
 		marketDataJob.Run()
 	}
 
-	monitored, err := store.IsTodayATOMonitored(context.Background(), today)
-	if err != nil {
-		log.Printf("[startup] check ATO monitor status: %v", err)
-	} else if !monitored {
-		log.Printf("[startup] ATO session not monitored today, running now")
-		go atoMonitorJob.Run()
-	}
-
-	if monitored && aiClient != nil && notifier != nil {
-		summarySent, err := store.IsSessionSummarySent(context.Background(), today)
-		if err != nil {
-			log.Printf("[startup] check session summary sent: %v", err)
-		} else if !summarySent {
-			log.Printf("[startup] session summary not yet sent — sending from DB")
-			go atoMonitorJob.SendSessionSummaryFromDB(context.Background(), today)
-		}
-	}
-
 	c := cron.New(cron.WithLocation(ict))
 
 	if _, err := c.AddJob(cfg.Cron.MarketData, marketDataJob); err != nil {
 		log.Fatalf("register market data cron job: %v", err)
 	}
 
-	if _, err := c.AddJob(cfg.Cron.ATOMonitor, atoMonitorJob); err != nil {
-		log.Fatalf("register ATO monitor cron job: %v", err)
+	if cfg.SignalMode != "swing" {
+		atoMonitorJob := job.NewATOMonitorJob(store, obClient, notifier, socialPoster, aiClient, cfg.Signal, cfg.ATO)
+
+		monitored, err := store.IsTodayATOMonitored(context.Background(), today)
+		if err != nil {
+			log.Printf("[startup] check ATO monitor status: %v", err)
+		} else if !monitored {
+			log.Printf("[startup] ATO session not monitored today, running now")
+			go atoMonitorJob.Run()
+		}
+
+		if monitored && aiClient != nil && notifier != nil {
+			summarySent, err := store.IsSessionSummarySent(context.Background(), today)
+			if err != nil {
+				log.Printf("[startup] check session summary sent: %v", err)
+			} else if !summarySent {
+				log.Printf("[startup] session summary not yet sent — sending from DB")
+				go atoMonitorJob.SendSessionSummaryFromDB(context.Background(), today)
+			}
+		}
+
+		if _, err := c.AddJob(cfg.Cron.ATOMonitor, atoMonitorJob); err != nil {
+			log.Fatalf("register ATO monitor cron job: %v", err)
+		}
+	}
+
+	if cfg.SignalMode != "ato" {
+		swingSignalJob := job.NewSwingSignalJob(store, notifier, aiClient, cfg.Signal, cfg.Swing, ict)
+
+		sent, err := store.IsSwingSignalSent(context.Background(), today)
+		if err != nil {
+			log.Printf("[startup] check swing signal sent: %v", err)
+		} else if !sent {
+			log.Printf("[startup] swing signal not yet sent today, running now")
+			go swingSignalJob.Run()
+		}
+
+		if _, err := c.AddJob(cfg.Swing.Cron, swingSignalJob); err != nil {
+			log.Fatalf("register swing signal cron job: %v", err)
+		}
 	}
 
 	c.Start()

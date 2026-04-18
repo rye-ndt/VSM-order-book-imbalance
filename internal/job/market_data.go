@@ -75,6 +75,20 @@ func (j *MarketDataJob) Run() {
 		log.Printf("[job] backfilled %d signal outcome fields", n)
 	}
 
+	n2, err := j.store.BackfillSwingOutcomes(ctx)
+	if err != nil {
+		log.Printf("[job] backfill swing outcomes: %v", err)
+	} else if n2 > 0 {
+		log.Printf("[job] backfilled %d swing outcome fields", n2)
+	}
+
+	n3, err := j.store.BackfillATODailyOutcomes(ctx)
+	if err != nil {
+		log.Printf("[job] backfill ato daily outcomes: %v", err)
+	} else if n3 > 0 {
+		log.Printf("[job] backfilled %d ato daily outcome fields", n3)
+	}
+
 	j.runAudit(ctx, today)
 }
 
