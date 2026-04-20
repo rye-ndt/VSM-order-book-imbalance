@@ -20,11 +20,12 @@ var _ output.Notifier = (*TelegramBot)(nil)
 // as the job's alert delivery mechanism.
 type TelegramBot struct {
 	bot           *tgbotapi.BotAPI
-	store         *PostgresMarketStore
+	store         output.BotStore
+	location      *time.Location
 	defaultChatID int64
 }
 
-func NewTelegramBot(cfg config.TelegramConfig, store *PostgresMarketStore) (*TelegramBot, error) {
+func NewTelegramBot(cfg config.TelegramConfig, store output.BotStore, location *time.Location) (*TelegramBot, error) {
 	if cfg.BotToken == "" {
 		return nil, fmt.Errorf("telegram: bot_token is not configured")
 	}
@@ -32,7 +33,7 @@ func NewTelegramBot(cfg config.TelegramConfig, store *PostgresMarketStore) (*Tel
 	if err != nil {
 		return nil, fmt.Errorf("telegram: init bot: %w", err)
 	}
-	return &TelegramBot{bot: bot, store: store, defaultChatID: cfg.ChatID}, nil
+	return &TelegramBot{bot: bot, store: store, location: location, defaultChatID: cfg.ChatID}, nil
 }
 
 // Notify sends message to all subscribers plus the default chat_id (if set).
@@ -125,7 +126,6 @@ Có thể do:
 Dùng /subscribe để nhận thông báo ngay khi tín hiệu xuất hiện.`
 	}
 
-	ict, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Tín hiệu ATO hôm nay (%d tín hiệu):\n", len(signals)))
 	for _, s := range signals {
@@ -135,7 +135,7 @@ Dùng /subscribe để nhận thông báo ngay khi tín hiệu xuất hiện.`
 		}
 		sb.WriteString(fmt.Sprintf(
 			"\n[%s] %s\nGiá vào: %.0f  |  Chốt lời: %.0f\nCỡ lệnh: %s\n",
-			s.FiredAt.In(ict).Format("15:04"),
+			s.FiredAt.In(b.location).Format("15:04"),
 			s.Symbol,
 			s.EntryPrice,
 			s.TPPrice,

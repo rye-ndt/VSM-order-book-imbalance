@@ -18,9 +18,6 @@ const (
 	defaultLookback = 20 * 24 * time.Hour
 	vnIndexSymbol   = "VNINDEX"
 	dateLayout      = "2006-01-02"
-
-	stockHistoryDays = 30
-	indexHistoryDays = 150
 )
 
 type MarketDataJob struct {
@@ -234,13 +231,13 @@ func (j *MarketDataJob) syncIndexOHLCV(ctx context.Context, yesterday, firstRunF
 }
 
 func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
-	stockHistory, err := j.store.LoadRecentStockOHLCV(ctx, stockHistoryDays)
+	stockHistory, err := j.store.LoadRecentStockOHLCV(ctx, j.signal.StockHistoryDays)
 	if err != nil {
 		log.Printf("[job] metrics: load stock history: %v", err)
 		return
 	}
 
-	vnHistory, err := j.store.LoadRecentIndexOHLCV(ctx, vnIndexSymbol, indexHistoryDays)
+	vnHistory, err := j.store.LoadRecentIndexOHLCV(ctx, vnIndexSymbol, j.signal.IndexHistoryDays)
 	if err != nil {
 		log.Printf("[job] metrics: load vnindex history: %v", err)
 		return
@@ -271,7 +268,7 @@ func (j *MarketDataJob) runMetricsPipeline(ctx context.Context) {
 			continue
 		}
 		if m, ok := calculator.ComputeStockMetrics(symbol, candles); ok {
-			m.ShouldMonitorToday = calculator.ShouldMonitorToday(m)
+			m.ShouldMonitorToday = calculator.ShouldMonitorToday(m, j.signal.MinMA20Value)
 			m.Regime = regime.Regime
 			m.ForeignNetBuy = foreignNetBuy[symbol]
 			m.FinalScore, m.PositionSizeFlag = calculator.ComputeFinalScore(m, j.signal)

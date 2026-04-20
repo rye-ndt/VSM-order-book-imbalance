@@ -30,7 +30,7 @@ func main() {
 	}
 	defer db.Close()
 
-	store := modules.NewPostgresMarketStore(db)
+	store := modules.NewPostgresMarketStore(db, cfg.ATO.Timezone)
 	stockClient := modules.NewSSIStockClient(cfg.SSI)
 
 	if err := store.Migrate(context.Background()); err != nil {

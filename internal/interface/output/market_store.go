@@ -227,6 +227,26 @@ type MarketStore interface {
 	BackfillATODailyOutcomes(ctx context.Context) (int, error)
 }
 
+// TodaySignal is a summary row from signal_log used by the Telegram bot's
+// /signal command to report intraday results to subscribers.
+type TodaySignal struct {
+	Symbol           string
+	EntryPrice       float64
+	TPPrice          float64
+	PositionSizeFlag string
+	FiredAt          time.Time
+}
+
+// BotStore is the minimal read/write surface the Telegram bot needs.
+// It is a subset of the full MarketStore, extracted so the bot adapter depends
+// on a narrow interface rather than a concrete Postgres type.
+type BotStore interface {
+	LoadTodaySignals(ctx context.Context) ([]TodaySignal, error)
+	LoadSubscribers(ctx context.Context) ([]int64, error)
+	AddSubscriber(ctx context.Context, chatID int64) error
+	RemoveSubscriber(ctx context.Context, chatID int64) error
+}
+
 // WatchlistEntry is one row from the morning watchlist query.
 // All metric fields are snapshotted here at session start so pollOnce can
 // populate SignalRecord without any DB round-trip during the hot polling loop.

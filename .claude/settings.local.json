@@ -36,7 +36,18 @@
       "Bash(ls *.yaml *.yml)",
       "Bash(__NEW_LINE_8b2c5d81efc81963__ psql -h localhost -p 5432 -U rye -d orderbook -c \":*)",
       "Bash(__NEW_LINE_8b2c5d81efc81963__ psql:*)",
-      "Bash(go vet *)"
+      "Bash(go vet *)",
+      "WebSearch",
+      "WebFetch(domain:stockanalysis.com)",
+      "WebFetch(domain:finance.yahoo.com)",
+      "WebFetch(domain:www.investing.com)",
+      "WebFetch(domain:finance.vietstock.vn)",
+      "WebFetch(domain:cafef.vn)",
+      "Bash(go test *)",
+      "Bash(git config *)",
+      "Bash(gpg --list-secret-keys)",
+      "Bash(ssh-add -l)",
+      "Bash(ssh-add --apple-use-keychain ~/.ssh/id_ed25519)"
     ]
   }
 }

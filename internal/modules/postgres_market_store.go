@@ -14,13 +14,15 @@ import (
 const ssiStoreDateFormat = "02/01/2006"
 
 var _ output.MarketStore = (*PostgresMarketStore)(nil)
+var _ output.BotStore = (*PostgresMarketStore)(nil)
 
 type PostgresMarketStore struct {
 	db *sql.DB
+	tz string
 }
 
-func NewPostgresMarketStore(db *sql.DB) *PostgresMarketStore {
-	return &PostgresMarketStore{db: db}
+func NewPostgresMarketStore(db *sql.DB, tz string) *PostgresMarketStore {
+	return &PostgresMarketStore{db: db, tz: tz}
 }
 
 func (s *PostgresMarketStore) Migrate(ctx context.Context) error {
@@ -654,29 +656,21 @@ func (s *PostgresMarketStore) LoadMonitoredStocks(ctx context.Context) ([]string
 	return symbols, rows.Err()
 }
 
-type TodaySignal struct {
-	Symbol          string
-	EntryPrice      float64
-	TPPrice         float64
-	PositionSizeFlag string
-	FiredAt         time.Time
-}
-
-func (s *PostgresMarketStore) LoadTodaySignals(ctx context.Context) ([]TodaySignal, error) {
+func (s *PostgresMarketStore) LoadTodaySignals(ctx context.Context) ([]output.TodaySignal, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol, entry_price, tp_price, position_size_flag, fired_at
 		FROM signal_log
-		WHERE fired_at >= (CURRENT_DATE AT TIME ZONE 'Asia/Ho_Chi_Minh') AT TIME ZONE 'UTC'
+		WHERE fired_at >= (CURRENT_DATE AT TIME ZONE $1) AT TIME ZONE 'UTC'
 		ORDER BY fired_at ASC
-	`)
+	`, s.tz)
 	if err != nil {
 		return nil, fmt.Errorf("load today signals: %w", err)
 	}
 	defer rows.Close()
 
-	var result []TodaySignal
+	var result []output.TodaySignal
 	for rows.Next() {
-		var r TodaySignal
+		var r output.TodaySignal
 		if err := rows.Scan(&r.Symbol, &r.EntryPrice, &r.TPPrice, &r.PositionSizeFlag, &r.FiredAt); err != nil {
 			return nil, fmt.Errorf("scan today signal: %w", err)
 		}
@@ -777,7 +771,7 @@ const queryBackfillD0 = `
 	SET close_d0 = o.close
 	FROM stock_ohlcv o
 	WHERE o.symbol       = s.symbol
-	  AND o.trading_date = (s.fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+	  AND o.trading_date = (s.fired_at AT TIME ZONE $1)::date
 	  AND s.close_d0    IS NULL
 `
 
@@ -789,7 +783,7 @@ const queryBackfillD1 = `
 		  AND trading_date = (
 			SELECT MIN(trading_date) FROM stock_ohlcv
 			WHERE symbol       = s.symbol
-			  AND trading_date > (s.fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+			  AND trading_date > (s.fired_at AT TIME ZONE $1)::date
 		)
 	)
 	WHERE close_d1 IS NULL
@@ -806,7 +800,7 @@ const queryBackfillD2 = `
 			  AND trading_date > (
 				SELECT MIN(trading_date) FROM stock_ohlcv
 				WHERE symbol       = s.symbol
-				  AND trading_date > (s.fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+				  AND trading_date > (s.fired_at AT TIME ZONE $1)::date
 			)
 		)
 	)
@@ -816,7 +810,7 @@ const queryBackfillD2 = `
 func (s *PostgresMarketStore) BackfillSignalOutcomes(ctx context.Context) (int64, error) {
 	var total int64
 	for _, q := range []string{queryBackfillD0, queryBackfillD1, queryBackfillD2} {
-		res, err := s.db.ExecContext(ctx, q)
+		res, err := s.db.ExecContext(ctx, q, s.tz)
 		if err != nil {
 			return total, err
 		}
@@ -1013,8 +1007,8 @@ func (s *PostgresMarketStore) LoadTodaySignalSymbols(ctx context.Context, date t
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol
 		FROM signal_log
-		WHERE (fired_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date = $1::date
-	`, date)
+		WHERE (fired_at AT TIME ZONE $1)::date = $2::date
+	`, s.tz, date)
 	if err != nil {
 		return nil, fmt.Errorf("load today signal symbols: %w", err)
 	}

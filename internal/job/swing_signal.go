@@ -136,8 +136,8 @@ func (j *SwingSignalJob) Run() {
 	var text string
 	if j.ai != nil {
 		aiCtx, cancel := context.WithTimeout(ctx, j.swing.AITimeout)
+		defer cancel()
 		text, err = j.ai.SwingBroadcast(aiCtx, broadcastRec)
-		cancel()
 		if err != nil {
 			log.Printf("[swing] AI broadcast: %v — using fallback", err)
 			text = buildSwingFallback(broadcastRec)

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 )
 
@@ -133,6 +132,19 @@ type SignalConfig struct {
 	// required before a sell warning fires.
 	// Suggested: 2 — ~4 seconds of confirmation at default 2s poll
 	SellWarnStabilityCount int `mapstructure:"sell_warn_stability_count"`
+
+	// MinMA20Value: minimum 20-day average traded value (VND) required for a
+	// symbol to appear on the watchlist. Filters out illiquid stocks.
+	// Suggested: 5_000_000_000 (5 billion VND)
+	MinMA20Value float64 `mapstructure:"min_ma20_value"`
+
+	// StockHistoryDays: calendar days of equity OHLCV history to load when
+	// computing nightly metrics. Must cover at least 20 trading days.
+	StockHistoryDays int `mapstructure:"stock_history_days"`
+
+	// IndexHistoryDays: calendar days of VN-Index history to load for regime
+	// computation. Must cover at least 20 weeks (~140 trading days).
+	IndexHistoryDays int `mapstructure:"index_history_days"`
 }
 
 // TwitterConfig holds OAuth 1.0a credentials for posting to X (Twitter).
@@ -187,10 +199,6 @@ func Load(path string) (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-
-	// Ensure mapstructure is used explicitly so it stays imported.
-	viperDecoderConfigOption := viper.DecodeHook(mapstructure.StringToTimeDurationHookFunc())
-	_ = viperDecoderConfigOption
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -256,6 +264,15 @@ func Load(path string) (*Config, error) {
 	}
 	if s.SellWarnStabilityCount == 0 {
 		s.SellWarnStabilityCount = 2
+	}
+	if s.MinMA20Value == 0 {
+		s.MinMA20Value = 5_000_000_000
+	}
+	if s.StockHistoryDays == 0 {
+		s.StockHistoryDays = 30
+	}
+	if s.IndexHistoryDays == 0 {
+		s.IndexHistoryDays = 150
 	}
 
 	if cfg.SignalMode == "" {

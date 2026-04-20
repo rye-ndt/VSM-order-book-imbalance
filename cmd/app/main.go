@@ -35,15 +35,20 @@ func main() {
 	}
 	defer db.Close()
 
+	ict, err := time.LoadLocation(cfg.ATO.Timezone)
+	if err != nil {
+		log.Fatalf("load timezone %s: %v", cfg.ATO.Timezone, err)
+	}
+
 	stockClient := modules.NewSSIStockClient(cfg.SSI)
-	store := modules.NewPostgresMarketStore(db)
+	store := modules.NewPostgresMarketStore(db, cfg.ATO.Timezone)
 
 	var obClient input.OrderBookClient
 	if cfg.SignalMode != "swing" {
 		obClient = modules.NewSSIOrderBookClient(cfg.SSI)
 	}
 
-	tgBot, err := modules.NewTelegramBot(cfg.Telegram, store)
+	tgBot, err := modules.NewTelegramBot(cfg.Telegram, store, ict)
 	if err != nil {
 		log.Printf("telegram bot disabled: %v", err)
 	}
@@ -74,11 +79,6 @@ func main() {
 
 	if err := store.Migrate(context.Background()); err != nil {
 		log.Fatalf("migrate market tables: %v", err)
-	}
-
-	ict, err := time.LoadLocation(cfg.ATO.Timezone)
-	if err != nil {
-		log.Fatalf("load timezone %s: %v", cfg.ATO.Timezone, err)
 	}
 
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 15*time.Second)

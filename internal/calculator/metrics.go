@@ -370,7 +370,7 @@ func RegimeScoreThreshold(regime output.RegimeLabel, cfg config.SignalConfig) in
 //   - Volume ratio >= 1.2x MA20
 //   - VPR not Distribution
 //   - MomentumScore >= 1
-func ShouldMonitorToday(m output.StockMetrics) bool {
+func ShouldMonitorToday(m output.StockMetrics, minMA20Value float64) bool {
 	bullishSetup := m.CPR >= 0.7 ||
 		m.CandlePattern == output.PatternHammer ||
 		m.CandlePattern == output.PatternDoji
@@ -383,7 +383,7 @@ func ShouldMonitorToday(m output.StockMetrics) bool {
 		m.VolumeRatio1D >= 1.2 &&
 		m.VPR != output.VPRDistribution &&
 		m.MomentumScore >= 1 &&
-		m.MA20Value >= 5_000_000_000
+		m.MA20Value >= minMA20Value
 }
 
 func computeResistanceDist(candles []input.OHLCV, close float64) float64 {
